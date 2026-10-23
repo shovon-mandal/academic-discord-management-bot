@@ -1,0 +1,18 @@
+# secrets
+.env
+*.env
+*service_account*.json
+cse-2201-*.json
+BOT_TOKEN*
+
+# student data & runtime (private — stays on the device, backed up via !backup)
+data/
+logs/
+backups/
+
+# python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.tmp

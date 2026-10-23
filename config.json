@@ -1,0 +1,88 @@
+{
+  "server_name": "NUBTK CSE · SM · Fall 2026",
+  "semester": "Fall 2026",
+  "teacher": "Shovon Mandal (SM)",
+  "invite_link": "",
+  "instructor": {
+    "name": "Shovon Mandal",
+    "initial": "SM",
+    "designation": "Lecturer",
+    "department": "Computer Science and Engineering (CSE)",
+    "email": "shovon.nubtk@gmail.com",
+    "WhatsApp": "+8801911549671 (Text Only)"
+  },
+  "command_prefix": "!",
+  "utc_offset_hours": 6,
+
+  "student_id_length": 11,
+  "nickname_format": "{last4}_{section}_{name}",
+  "teacher_role": "Teacher",
+  "verified_role": "Verified",
+  "section_role_format": "Sec-{section}",
+  "duplicate_id_policy": "admin_approval",
+  "roster_check": false,
+  "lock_nickname_change": true,
+  "welcome_ping_delete_after_minutes": 30,
+  "id_channel_slowmode_seconds": 5,
+  "course_group_categories": true,
+
+  "daily_backup": {
+    "enabled": true,
+    "time": "23:30",
+    "keep_last": 14
+  },
+
+  "courses": {
+    "CSE1205": { "code": "CSE 1205", "title": "Digital Logic Design", "short": "DLD", "credit": 3, "type": "theory", "lab": "CSE1206" },
+    "CSE1206": { "code": "CSE 1206", "title": "Digital Logic Design Lab", "short": "DLD Lab", "credit": 1, "type": "lab" },
+    "CSE2109": { "code": "CSE 2109", "title": "Object-Oriented Programming II", "short": "OOP II", "credit": 3, "type": "theory", "lab": "CSE2110" },
+    "CSE2110": { "code": "CSE 2110", "title": "Object-Oriented Programming II Lab", "short": "OOP II Lab", "credit": 1, "type": "lab" },
+    "CSE2217": { "code": "CSE 2217", "title": "Computer Architecture", "short": "Computer Architecture", "credit": 3, "type": "theory" }
+  },
+
+  "sections": {
+    "2C": { "courses": ["CSE1205", "CSE1206"], "color": "#e74c3c", "evening": false },
+    "2D": { "courses": ["CSE1205", "CSE1206"], "color": "#3498db", "evening": false },
+    "3D": { "courses": ["CSE2109", "CSE2110"], "color": "#f1c40f", "evening": false },
+    "3E": { "courses": ["CSE2109", "CSE2110"], "color": "#2ecc71", "evening": false },
+    "4B": { "courses": ["CSE2217"], "color": "#9b59b6", "evening": false },
+    "4P": { "courses": ["CSE2217"], "color": "#e67e22", "evening": true }
+  },
+
+  "channels": {
+    "welcome_category": "👋 WELCOME",
+    "welcome": "👋┃welcome",
+    "id_channel": "🪪┃id-name-section",
+    "admin_category": "🔒 ADMIN",
+    "admin": "🛠️┃admin",
+    "logs": "📜┃bot-logs",
+
+    "section": [
+      { "key": "announcement", "name": "📢┃announcement", "type": "text", "student_write": false, "topic": "Section {section} announcements ({courses})" },
+      { "key": "general", "name": "💬┃general-text", "type": "text", "student_write": true, "topic": "Students can write, attach files and create threads here" },
+      { "key": "resources", "name": "📚┃resources", "type": "text", "student_write": false },
+      { "key": "marks", "name": "📊┃marks-sheet", "type": "text", "student_write": false },
+      { "key": "presentation", "name": "🎞️┃presentation-slide", "type": "text", "student_write": true, "topic": "Upload your presentation slides here" }
+    ],
+
+    "lab": [
+      { "key": "lab", "name": "🧪┃lab", "type": "text", "student_write": false, "topic": "Lab tasks and lab announcements" }
+    ],
+
+    "section_voice": [
+      { "key": "voice_class", "name": "🔊┃voice channel", "type": "voice" }
+    ],
+
+    "course_group": [
+      { "key": "announcement", "name": "📢┃course-announcement", "type": "text", "student_write": false },
+      { "key": "resources", "name": "📚┃course-resources", "type": "text", "student_write": false },
+      { "key": "voice", "name": "🔊┃combined class", "type": "voice" }
+    ],
+
+    "all_students_category": "🏫 ALL STUDENTS",
+    "all_students": [
+      { "key": "notice", "name": "📌┃notice-board", "type": "text", "student_write": false },
+      { "key": "voice", "name": "🔊┃lounge", "type": "voice" }
+    ]
+  }
+}
