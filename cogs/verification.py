@@ -597,45 +597,98 @@ class Verification(commands.Cog):
             await self._post_pinned(adm, only_pinned=True, embed=admin_cog.help_embed())
         await self.post_section_welcomes(guild)
 
-    def section_welcome_embed(self, sec: str, invite_url: str) -> discord.Embed:
-        s = self.s
-        ins = s.raw.get("instructor", {}) or {}
-        courses = "\n".join(f"• **{s.courses[c]['code']}** — {s.courses[c]['title']}" for c in s.section_courses(sec))
-        evening = " (Evening)" if s.is_evening(sec) else ""
-        e = discord.Embed(
-            title=f"👋 Welcome to Section {sec}{evening}!",
-            description=(
-                f"**Your courses:**\n{courses}\n\n"
-                "This server is where we communicate about everything related to these courses — "
-                "announcements, resources, marks, presentations and lab work.\n\n"
-                f"I am **{ins.get('name', s.teacher)} ({ins.get('initial', '')})**, your course instructor. 🙂\n\n"
-                f"**👥 Invite your classmates of Section {sec}**\n"
-                f"Share this link with friends who are in this section:\n```{invite_url or 'ask the teacher for the link'}```"
-            ),
-            color=discord.Color(s.section_color(sec)))
-        details = "\n".join(f"**{k}:** {v}" for k, v in (
-            ("Name", ins.get("name")), ("Initial", ins.get("initial")), ("Designation", ins.get("designation")),
-            ("Department", ins.get("department"))) if v)
-        contact = "\n".join(f"**{k}:** {v}" for k, v in (
-            ("📧 E-mail", ins.get("email")), ("💬 Discord", ins.get("discord")),
-            ("📱 WhatsApp", ins.get("whatsapp"))) if v)
+    # ---- instructor card (shown in every announcement channel) ----
+    DETAIL_KEYS = ("name", "initial", "designation", "department")
+    CONTACT_LABELS = {"email": "📧 E-mail", "e-mail": "📧 E-mail", "mail": "📧 E-mail",
+                      "discord": "💬 Discord", "whatsapp": "📱 WhatsApp", "phone": "📞 Phone",
+                      "mobile": "📞 Mobile", "website": "🌐 Website", "web": "🌐 Website",
+                      "office": "🏢 Office", "room": "🏢 Room", "facebook": "📘 Facebook",
+                      "linkedin": "💼 LinkedIn", "counseling": "🕒 Counseling hours"}
+
+    def _instructor(self) -> dict:
+        """Instructor block from config.json, keys made case-insensitive."""
+        return {str(k).strip().lower(): str(v).strip()
+                for k, v in (self.s.raw.get("instructor", {}) or {}).items() if str(v).strip()}
+
+    def _add_instructor_fields(self, e: discord.Embed):
+        ins = self._instructor()
+        details = "\n".join(f"**{k.title()}:** {ins[k]}" for k in self.DETAIL_KEYS if k in ins)
+        contact = "\n".join(f"**{self.CONTACT_LABELS.get(k, k.replace('_', ' ').title())}:** {v}"
+                             for k, v in ins.items() if k not in self.DETAIL_KEYS)
         if details:
             e.add_field(name="👨‍🏫 Instructor details", value=details[:1024], inline=True)
         if contact:
             e.add_field(name="📞 Contact information", value=contact[:1024], inline=True)
         e.add_field(name="\u200b", value="If you have any query, feel free to ask. 😊", inline=False)
+
+    def _intro_line(self) -> str:
+        ins = self._instructor()
+        name = ins.get("name", self.s.teacher)
+        initial = f" ({ins['initial']})" if ins.get("initial") else ""
+        return f"I am **{name}{initial}**, your course instructor. 🙂"
+
+    def _invite_block(self, who: str, invite_url: str) -> str:
+        return (f"**👥 Invite your classmates{who}**\n"
+                f"Share this link with friends:\n```{invite_url or 'ask the teacher for the link'}```")
+
+    def section_welcome_embed(self, sec: str, invite_url: str) -> discord.Embed:
+        s = self.s
+        courses = "\n".join(f"• **{s.courses[c]['code']}** — {s.courses[c]['title']}" for c in s.section_courses(sec))
+        evening = " (Evening)" if s.is_evening(sec) else ""
+        e = discord.Embed(
+            title=f"👋 Welcome to Section {sec}{evening}!",
+            description=(f"**Your courses:**\n{courses}\n\n"
+                         "This server is where we communicate about everything related to these courses — "
+                         "announcements, resources, marks, presentations and lab work.\n\n"
+                         f"{self._intro_line()}\n\n" + self._invite_block(f" of Section {sec}", invite_url)),
+            color=discord.Color(s.section_color(sec)))
+        self._add_instructor_fields(e)
         e.set_footer(text=f"{s.semester} · Section {sec}")
+        return e
+
+    def group_welcome_embed(self, theory: str, group: dict, invite_url: str) -> discord.Embed:
+        s = self.s
+        courses = "\n".join(f"• **{s.courses[c]['code']}** — {s.courses[c]['title']}" for c in group["courses"])
+        e = discord.Embed(
+            title=f"👋 Welcome to {s.codes_label(group['courses'])} · {s.courses[theory]['short']}!",
+            description=(f"**Courses:**\n{courses}\n**Sections:** {', '.join(group['sections'])}\n\n"
+                         "This category is shared by all sections of this course — common announcements "
+                         "and resources are posted here.\n\n"
+                         f"{self._intro_line()}\n\n" + self._invite_block("", invite_url)),
+            color=discord.Color.blurple())
+        self._add_instructor_fields(e)
+        e.set_footer(text=f"{s.semester} · {', '.join(group['sections'])}")
+        return e
+
+    def all_welcome_embed(self, invite_url: str) -> discord.Embed:
+        s = self.s
+        lines = "\n".join(f"• **{sec}** — {s.section_courses_text(sec)}" + (" (Evening)" if s.is_evening(sec) else "")
+                           for sec in s.sections)
+        e = discord.Embed(
+            title=f"👋 Welcome to {s.server_name}!",
+            description=(f"**All sections & courses:**\n{lines}\n\n"
+                         "This server is where we communicate about everything related to our courses.\n\n"
+                         f"{self._intro_line()}\n\n" + self._invite_block("", invite_url)),
+            color=discord.Color.gold())
+        self._add_instructor_fields(e)
+        e.set_footer(text=s.semester)
         return e
 
     async def post_section_welcomes(self, guild):
         url = await self.bot.get_invite_url()
         for sec in self.s.sections:
             ch = self.bot.channel_for(f"sec:{sec}:announcement")
-            if not ch:
-                continue
-            msg = await self._post_pinned(ch, only_pinned=True, embed=self.section_welcome_embed(sec, url))
-            if msg:
-                self.bot.ids.set(f"sec:{sec}:welcome_msg", msg.id)
+            if ch:
+                msg = await self._post_pinned(ch, only_pinned=True, embed=self.section_welcome_embed(sec, url))
+                if msg:
+                    self.bot.ids.set(f"sec:{sec}:welcome_msg", msg.id)
+        for theory, group in self.s.course_groups().items():
+            ch = self.bot.channel_for(f"group:{theory}:announcement")
+            if ch:
+                await self._post_pinned(ch, only_pinned=True, embed=self.group_welcome_embed(theory, group, url))
+        ch = self.bot.channel_for("all:notice")
+        if ch:
+            await self._post_pinned(ch, only_pinned=True, embed=self.all_welcome_embed(url))
 
     def section_welcome_link(self, sec: str) -> str:
         g = self.bot.main_guild()
@@ -648,7 +701,7 @@ class Verification(commands.Cog):
     @commands.command(name="setup_welcome")
     async def setup_welcome(self, ctx):
         await self.post_welcome_messages(ctx.guild)
-        await ctx.send("✅ Welcome buttons, ID instructions and admin help re-posted.")
+        await ctx.send("✅ Re-posted: welcome buttons, ID instructions, admin help and the instructor card in every announcement channel.")
 
 
 async def setup(bot):

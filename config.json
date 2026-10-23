@@ -9,7 +9,7 @@
     "designation": "Lecturer",
     "department": "Computer Science and Engineering (CSE)",
     "email": "shovon.nubtk@gmail.com",
-    "WhatsApp": "+8801911549671 (Text Only)"
+    "whatsapp": "+8801911549671 (Text Only)"
   },
   "command_prefix": "!",
   "utc_offset_hours": 6,
