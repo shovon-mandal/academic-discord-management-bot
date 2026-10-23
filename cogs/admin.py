@@ -51,6 +51,7 @@ HELP = [
         ("att_report <sec> [course]", "Whole-semester % per student"),
     ]),
     ("💾 Data & System", [
+        ("excel [all | 2C | CSE1205 | CSE1205 2C]", "📗 Student list as one Excel file (sheet per course+section)"),
         ("export [all | 2C | CSE1205 | CSE1205 2C]", "Download student files (CSV/JSON)"),
         ("backup", "Zip of all data"),
         ("status", "Uptime, CPU temp, RAM, git version"),
@@ -398,6 +399,41 @@ class Admin(commands.Cog):
             await asyncio.sleep(1.0)
         await status.edit(content=f"✅ DM sent: **{sent}** · failed: **{len(failed)}**"
                                   + (f"\nFailed: {', '.join(failed[:30])}" if failed else ""))
+
+    # ------------------------------------------------------------ excel
+    def _pairs(self, target: str):
+        s = self.s
+        parts = target.split()
+        if not parts or parts[0].lower() == "all":
+            return [(c, sec) for sec in s.sections for c in s.section_courses(sec)]
+        secs, courses = [], []
+        for p in parts:
+            sec, c = s.normalize_section(p), s.normalize_course(p)
+            if sec:
+                secs.append(sec)
+            elif c:
+                courses.append(c)
+            else:
+                raise commands.BadArgument(f"`{p}` is not a section or course.")
+        pairs = [(c, sec) for sec in (secs or list(s.sections)) for c in s.section_courses(sec)
+                 if not courses or c in courses]
+        if not pairs:
+            raise commands.BadArgument("That course/section combination does not exist.")
+        return pairs
+
+    @commands.command(name="excel", aliases=["xlsx"])
+    async def excel(self, ctx, *, target: str = "all"):
+        """One Excel file: Summary sheet + one sheet per course/section."""
+        pairs = self._pairs(target)
+        try:
+            from core.excel import build_student_workbook
+            name = "students_" + ("all" if target.strip().lower() in ("", "all") else "_".join(target.split()))
+            dest = DATA_DIR / "exports" / f"{name}_{self.s.now():%Y%m%d_%H%M}.xlsx"
+            path = await asyncio.to_thread(build_student_workbook, self.bot.store, self.s, pairs, dest)
+        except ImportError:
+            raise commands.BadArgument("openpyxl is not installed yet — run `!update` (it installs requirements).")
+        total = sum(len(self.bot.store.section_students(sec)) for sec in {p[1] for p in pairs})
+        await ctx.send(f"📗 Excel file · {len(pairs)} sheet(s) · {total} students", file=discord.File(path))
 
     # ------------------------------------------------------------ export
     @commands.command(name="export")

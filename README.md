@@ -57,6 +57,7 @@ data/students/CSE1205_2C.csv   data/students/CSE1205_2C.json
 data/students/CSE1206_2C.csv   ...
 ```
 The CSV files open directly in Excel. The JSON files are for scripts.
+**`!excel`** sends one `.xlsx` file with a Summary sheet and one sheet for each course and section (`!excel 2C` or `!excel CSE1205` for just one).
 
 ### 🗓️ Voice attendance
 - `!att_start 2C 15` opens attendance for 15 minutes. Students who join a voice channel of that section are marked present.
@@ -69,7 +70,8 @@ The CSV files open directly in Excel. The JSON files are for scripts.
 - `!invite` gives the invite link and a ready-made join guide for Facebook or WhatsApp groups.
 
 ### ⚙️ Remote control and backups
-- `!update` pulls new code from GitHub, checks it, and restarts the bot.
+- **Auto-update:** every 5 minutes the bot checks GitHub. If you pushed new code, it pulls it, checks it, and restarts by itself. If `config.json` changed, the welcome messages are re-posted automatically.
+- `!update` does the same right away.
 - `!restart`, `!status` (uptime, CPU temperature, RAM, disk, git version) and `!logs`.
 - A **daily backup** zip is posted to `📜┃bot-logs`, and `!backup` makes one any time.
 
@@ -186,7 +188,8 @@ Commands work only in `🛠️┃admin` or `📜┃bot-logs`, and only for the t
 | `!att_start 2C [CSE1206] [minutes]` | Starts voice attendance |
 | `!att_stop 2C` / `!att_status` | Stops attendance and gets the CSV / shows running sessions |
 | `!att_report 2C [course]` | Attendance percentage for the semester |
-| `!export [all \| 2C \| CSE1205 \| CSE1205 2C]` | Downloads student files |
+| `!excel [all \| 2C \| CSE1205 \| CSE1205 2C]` | Student list as one Excel file |
+| `!export [all \| 2C \| CSE1205 \| CSE1205 2C]` | Downloads student files (CSV/JSON) |
 | `!backup` | Zip of all data |
 | `!status` / `!logs [n]` | Bot health / last log lines |
 | `!update` / `!restart` | Pulls from GitHub and restarts / restarts only |
@@ -200,7 +203,7 @@ git add .
 git commit -m "what changed"
 git push
 ```
-Then type **`!update`** in `🛠️┃admin`. If you changed sections or channels, also type **`!setup_server`**.
+That's it. Within 5 minutes the bot pulls the change and restarts by itself (or type **`!update`** to do it now). If you changed sections or channels, also type **`!setup_server`**.
 
 ---
 
@@ -216,6 +219,7 @@ Then type **`!update`** in `🛠️┃admin`. If you changed sections or channel
 | `roster_check` | `true` sends IDs that are not on the roster to the teacher for approval |
 | `nickname_format` | Default `{last4}_{section}_{name}` (`{id}` also works) |
 | `daily_backup.time` | Backup time (local time, see `utc_offset_hours`) |
+| `auto_update` | `enabled` and `check_minutes` for automatic updates from GitHub |
 
 To add a section or course next semester, edit `config.json`, push, then run `!update` and `!setup_server`.
 

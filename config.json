@@ -26,6 +26,11 @@
   "id_channel_slowmode_seconds": 5,
   "course_group_categories": true,
 
+  "auto_update": {
+    "enabled": true,
+    "check_minutes": 5
+  },
+
   "daily_backup": {
     "enabled": true,
     "time": "23:30",

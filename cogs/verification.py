@@ -13,6 +13,7 @@ from itertools import cycle
 import discord
 from discord.ext import commands
 
+from core.config import DATA_DIR
 from core.parsing import build_nickname, clean_name, parse_verification_text
 from core.storage import append_audit, load_roster
 
@@ -462,6 +463,16 @@ class Verification(commands.Cog):
             return
         self._scanned = True
         await asyncio.sleep(3)
+        flag = DATA_DIR / ".repost_welcome"
+        if flag.exists():
+            try:
+                flag.unlink()
+            except OSError:
+                pass
+            g = self.bot.main_guild()
+            if g:
+                await self.post_welcome_messages(g)
+                await self.bot.send_log("📌 Welcome messages re-posted", "config.json was updated.")
         v, e = await self.scan_id_channel(reply_errors=False)
         if v or e:
             await self.bot.send_log("🕒 Offline messages processed", f"Verified: **{v}** · Not valid yet: **{e}**")
