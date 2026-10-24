@@ -69,6 +69,7 @@ A control panel is posted in `🛠️┃admin`: **one message per row**, each li
 | 🎓 Students | Student list · Excel · Find · Pending · Remind unverified |
 | 👤 Members | Verify · Move section · Rename · Unverify · Kick unverified |
 | ⚙️ System | Re-post welcome · Backup · Status · Update · Restart |
+| 🗓️ Routine & reminders | Check routine · Show routine · Remind a message |
 | 📖 Help | All commands · Show panel here |
 
 `!setup_server` and `!reset_server` are **text only**. Both show a warning with **Yes / Cancel** buttons before doing anything.
@@ -79,6 +80,17 @@ A control panel is posted in `🛠️┃admin`: **one message per row**, each li
 - When attendance stops (by button, command or auto-stop), the bot posts an **Excel sheet** showing class date, start and stop time, class duration, and for each student: Present/Absent, first join, last leave, minutes in class, % of class time, and number of joins.
 - The **attendance report** (📈) is an Excel file with one column per class (`P (42m)` / `A`) plus total and %. Students below 60% are highlighted.
 - Optional: set `attendance_min_percent` (e.g. `50`) so a student must stay at least that % of the class to count as present.
+
+### 🗓️ Routine from the department Google Sheet
+- `config.json → routine.sheet_url` points to the official routine sheet. The bot reads its grid tabs (`CSE`, `ECSE`) and finds every class of the teacher (`teacher_initial`) for each section.
+- Each section has a read-only **🗓️┃routine** channel with **one pinned message that is always the latest routine** (day, time, course, room).
+- Click **🔄 Check routine** (or `!routine_check`). The bot also checks automatically every 6 hours. If anything changed, it replaces the pinned routine and posts what changed (➕ new / ➖ removed) with a ping.
+- The sheet must be shared as **Anyone with the link → Viewer**.
+
+### ⏰ Reminders for any message
+Re-announce an existing message (assignment deadline, CT notice…) now or later:
+- **Right-click the message → Apps → ⏰ Set reminder**, or click **⏰ Remind a message** in the panel and paste the message link.
+- Choose when (empty = now, or several times like `2026-10-28 20:00, 2026-10-29 08:00`, `+1d`). It posts in the same section's announcement channel with a ping, a quote of the message and a button to open the original.
 
 ### 📊 Marks by private DM
 `!marks_dm CT-1 Marks` with a CSV or Excel file attached sends every student **only their own row** of marks by DM.
@@ -108,7 +120,7 @@ A control panel is posted in `🛠️┃admin`: **one message per row**, each li
 🌐 CSE 2217 · Computer Architecture · 4B, 4P     ┘   📢┃course-announcement 📚┃course-resources 🔊┃combined class
 📘 2C · CSE 1205/1206 · DLD
    📢┃announcement  💬┃general-text ✍️  📚┃resources  📊┃marks-sheet
-   🎞️┃presentation-slide ✍️  🧪┃lab  🔊┃voice channel
+   🎞️┃presentation-slide ✍️  🗓️┃routine  🧪┃lab  🔊┃voice channel
 📘 2D · 3D · 3E      (same, with 🧪┃lab)
 📘 4B · 4P (Evening) (same, no lab channel)
 🔒 ADMIN             (teacher only)
@@ -134,7 +146,7 @@ A control panel is posted in `🛠️┃admin`: **one message per row**, each li
 2. Turn ON **Server Members Intent** and **Message Content Intent**, then click **Save**.
 3. Copy the bot token. Keep it secret.
 4. Invite the bot with Administrator permission:
-   `https://discord.com/oauth2/authorize?client_id=YOUR_APP_ID&permissions=8&scope=bot`
+   `https://discord.com/oauth2/authorize?client_id=YOUR_APP_ID&permissions=8&scope=bot+applications.commands`
 5. In your server, go to **Server Settings → Roles** and drag the bot's role to the **top**.
 
 ### 2. Get the files
@@ -266,7 +278,8 @@ cogs/
   verification.py       welcome, buttons, form, verification, section welcome
   admin.py              admin commands
   attendance.py         voice attendance + time tracking + Excel
-  panel.py              button control panel, scheduled announcements
+  panel.py              button control panel, scheduled announcements, reminders
+  routine.py            routine from Google Sheet → pinned per section
   maintenance.py        backup, status, logs, update, restart
 scripts/                Windows .bat files, Linux installer, systemd helper
 data/                   student records, attendance, roster (private, not in git)

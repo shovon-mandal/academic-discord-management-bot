@@ -76,7 +76,13 @@ class VerifyModal(discord.ui.Modal):
         await interaction.response.defer(ephemeral=True, thinking=True)
         result = await self.cog.verify_request(interaction.guild, interaction.user, self.sec,
                                                self.sid.value, self.full_name.value, source="form")
-        await interaction.followup.send(embed=result.embed(), ephemeral=True)
+        kwargs = {"embed": result.embed(), "ephemeral": True}
+        if result.status in ("verified", "already"):
+            rec = self.cog.bot.store.get(interaction.user.id)
+            view = self.cog.go_view(rec["section"]) if rec else None
+            if view:
+                kwargs["view"] = view
+        await interaction.followup.send(**kwargs)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception):
         log.exception("Modal error", exc_info=error)
@@ -246,18 +252,22 @@ class Verification(commands.Cog):
             f"{member.mention} · `{member.name}`\n**Section:** {sec} · {s.section_courses_text(sec)}\n"
             f"**ID:** `{sid}` · **Name:** {name}\n**Nickname:** `{nick}` · via `{by}`{nick_note}", GREEN)
 
-        link = self.section_welcome_link(sec)
-        go = f"\n\n👉 **Start here:** {link}" if link else ""
         try:
-            await member.send(embed=discord.Embed(
+            dm = {"embed": discord.Embed(
                 title="✅ You are verified!",
                 description=(f"Server: **{guild.name}**\nSection: **{sec}** · {s.section_courses_text(sec)}\n"
-                             f"Nickname: `{nick}`\n\nYour section channels are now open." + go),
-                color=GREEN))
+                             f"Nickname: `{nick}`\n\nYour section channels are now open — including **all earlier "
+                             "messages, slides and resources**. Start with your section's announcement page 👇"),
+                color=GREEN)}
+            gv = self.go_view(sec)
+            if gv:
+                dm["view"] = gv
+            await member.send(**dm)
         except discord.HTTPException:
             pass
         return True, (f"Welcome to **Section {sec}** ({s.section_courses_text(sec)}).\n"
-                      f"Your nickname is now `{nick}`. Your section channels are now open." + go)
+                      f"Your nickname is now `{nick}`.\nYour section channels are now open, with **all earlier "
+                      "messages and files**. 👇 Click the button to go to your section's announcement page.")
 
     async def remove_verification(self, guild, member, by="admin") -> dict | None:
         roles = [r for r in member.roles if r.id in self.section_role_ids()]
@@ -700,6 +710,24 @@ class Verification(commands.Cog):
         ch = self.bot.channel_for("all:notice")
         if ch:
             await self._post_pinned(ch, only_pinned=True, embed=self.all_welcome_embed(url))
+
+    def section_link_url(self, sec: str) -> str:
+        """URL that opens the section's announcement channel at the pinned welcome card."""
+        g = self.bot.main_guild()
+        ch = self.bot.channel_for(f"sec:{sec}:announcement")
+        if not g or not ch:
+            return ""
+        mid = self.bot.ids.get(f"sec:{sec}:welcome_msg")
+        return f"https://discord.com/channels/{g.id}/{ch.id}" + (f"/{mid}" if mid else "")
+
+    def go_view(self, sec: str):
+        url = self.section_link_url(sec)
+        if not url:
+            return None
+        v = discord.ui.View(timeout=None)
+        v.add_item(discord.ui.Button(label=f"Open Section {sec} announcements", emoji="👉",
+                                     style=discord.ButtonStyle.link, url=url))
+        return v
 
     def section_welcome_link(self, sec: str) -> str:
         g = self.bot.main_guild()

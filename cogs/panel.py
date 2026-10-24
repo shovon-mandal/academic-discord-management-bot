@@ -9,10 +9,12 @@ Also here: scheduled announcements (post later at a chosen time).
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from datetime import datetime, timedelta
 
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
 from core.config import DATA_DIR
@@ -257,6 +259,54 @@ class ScheduledMenu(BaseMenu):
         self.cog.save_jobs()
         await interaction.response.edit_message(content="🗑️ Cancelled the selected scheduled posts.", view=None,
                                                 embed=None)
+
+
+class ReminderModal(discord.ui.Modal):
+    def __init__(self, cog, link: str = ""):
+        super().__init__(title="⏰ Reminder for a message", timeout=900)
+        self.cog = cog
+        self.link = discord.ui.TextInput(label="Message link (or message ID)", default=link or None,
+                                         placeholder="Right-click the message → Copy Message Link", max_length=200)
+        self.when = discord.ui.TextInput(label="When? (empty = now · several: use commas)", required=False,
+                                         placeholder="2026-10-28 20:00, 2026-10-29 08:00   or   +1d   or   21:30",
+                                         max_length=120)
+        self.note = discord.ui.TextInput(label="Reminder note (optional)", required=False,
+                                         style=discord.TextStyle.paragraph, max_length=1000,
+                                         placeholder="e.g. Assignment 2 deadline is tomorrow 11:59 PM!")
+        self.target = discord.ui.TextInput(label="Where? (empty = same as the message)",
+                                           required=False, max_length=40, placeholder="2C  ·  2C:lab  ·  CSE1205  ·  all")
+        for x in (self.link, self.when, self.note, self.target):
+            self.add_item(x)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            msg = await self.cog.resolve_message(interaction.guild, self.link.value)
+        except commands.BadArgument as e:
+            await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
+            return
+        target = (self.target.value or "").strip() or self.cog.reminder_target(msg.channel)
+        kind, _ = self.cog.bot.get_cog("Admin").resolve_target(target)
+        if not kind:
+            await interaction.followup.send(f"⚠️ `{target}` is not a valid target (all / 2C / 2C:lab / CSE1205).",
+                                            ephemeral=True)
+            return
+        times = [t.strip() for t in (self.when.value or "").split(",") if t.strip()]
+        if not times:
+            await self.cog.post_reminder(target, msg.jump_url, self.cog.snapshot(msg), self.note.value)
+            await interaction.followup.send(f"⏰ Reminder posted → **{target}**.", ephemeral=True)
+            return
+        done_at = []
+        for t in times:
+            when = self.cog.parse_when(t)
+            if not when:
+                await interaction.followup.send(f"⚠️ Could not read the time `{t}`.", ephemeral=True)
+                return
+            self.cog.add_schedule([target], self.note.value, "⏰ Reminder", True, when, interaction.user.name,
+                                  kind="reminder", link=msg.jump_url, snapshot=self.cog.snapshot(msg))
+            done_at.append(f"{when:%a %d %b, %I:%M %p}")
+        await interaction.followup.send(f"🗓️ Reminder scheduled → **{target}** at: " + " · ".join(done_at),
+                                        ephemeral=True)
 
 
 # ====================================================================== attendance
@@ -565,7 +615,12 @@ PANEL_GROUPS = [
         ("update", "Update", "🔄", B.primary, "Get newest code from GitHub and restart."),
         ("restart", "Restart", "♻️", B.danger, "Restart the bot (~15 s)."),
     ]),
-    ("Row 6 · 📖 Help", discord.Color.teal(), [
+    ("Row 6 · 🗓️ Routine & reminders", discord.Color.purple(), [
+        ("routine_check", "Check routine", "🔄", B.success, "Read the department routine sheet → update each section's pinned 🗓️┃routine and announce changes."),
+        ("routine_show", "Show routine", "🗓️", B.secondary, "Show the saved routine of every section here."),
+        ("reminder", "Remind a message", "⏰", B.primary, "Paste a message link → re-announce it now or later (deadline, CT…). Tip: right-click a message → Apps → ⏰ Set reminder."),
+    ]),
+    ("Row 7 · 📖 Help", discord.Color.teal(), [
         ("allcmds", "All commands", "📖", B.primary, "Every text command with an example."),
         ("panel", "Show panel here", "🎛️", B.secondary, "Open this whole panel privately, anywhere."),
     ]),
@@ -604,6 +659,9 @@ class Panel(commands.Cog):
         self.bot = bot
         self.s = bot.settings
         self.jobs: dict = load_json(SCHEDULE_FILE, {})
+        self.ctx_menu = app_commands.ContextMenu(name="⏰ Set reminder", callback=self.ctx_set_reminder)
+        self.ctx_menu.default_permissions = discord.Permissions(administrator=True)
+        self.bot.tree.add_command(self.ctx_menu)
 
     async def cog_load(self):
         for i in range(len(PANEL_GROUPS)):
@@ -613,6 +671,7 @@ class Panel(commands.Cog):
 
     async def cog_unload(self):
         self.scheduler.cancel()
+        self.bot.tree.remove_command(self.ctx_menu.name, type=self.ctx_menu.type)
 
     # ------------------------------------------------------------ panel message
     def header_embed(self) -> discord.Embed:
@@ -719,6 +778,24 @@ class Panel(commands.Cog):
             admin = self.bot.get_cog("Admin")
             await interaction.response.send_message(embeds=admin.help_embeds(), ephemeral=True)
             return
+        if key == "routine_check":
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            try:
+                report, _ = await self.bot.get_cog("Routine").check()
+                await interaction.channel.send(report[:1990])
+                await interaction.followup.send("✅ Routine checked.", ephemeral=True)
+            except commands.BadArgument as e:
+                await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
+            except Exception as e:  # noqa: BLE001
+                log.exception("routine check failed")
+                await interaction.followup.send(f"❌ Routine check failed: `{str(e)[:300]}`", ephemeral=True)
+            return
+        if key == "routine_show":
+            await quick("routine")
+            return
+        if key == "reminder":
+            await interaction.response.send_modal(ReminderModal(self))
+            return
         if key == "announce":
             await menu(TargetMenu(self, uid, "announce"),
                        "📢 **Announcement** — pick one or more targets, then click a button to write it.\n"
@@ -800,6 +877,86 @@ class Panel(commands.Cog):
         except commands.BadArgument as e:
             await ctx.send(f"⚠️ {e}")
 
+    # ------------------------------------------------------------ reminders
+    async def resolve_message(self, guild, raw: str) -> discord.Message:
+        raw = (raw or "").strip()
+        m = re.search(r"channels/(\d+)/(\d+)/(\d+)", raw)
+        if m:
+            ch = guild.get_channel(int(m.group(2))) or guild.get_thread(int(m.group(2)))
+            if ch is None:
+                raise commands.BadArgument("That channel is not in this server.")
+            try:
+                return await ch.fetch_message(int(m.group(3)))
+            except discord.HTTPException:
+                raise commands.BadArgument("Message not found (deleted?).")
+        if raw.isdigit():
+            for ch in guild.text_channels:
+                try:
+                    return await ch.fetch_message(int(raw))
+                except discord.HTTPException:
+                    continue
+        raise commands.BadArgument("Paste the message link: right-click the message → **Copy Message Link**.")
+
+    def reminder_target(self, channel) -> str:
+        cat = getattr(channel, "category_id", None)
+        for sec in self.s.sections:
+            c = self.bot.channel_for(f"sec:{sec}:category")
+            if c and c.id == cat:
+                lab = self.bot.channel_for(f"sec:{sec}:lab")
+                return f"{sec}:lab" if lab and lab.id == channel.id else sec
+        for theory in self.s.course_groups():
+            c = self.bot.channel_for(f"group:{theory}:category")
+            if c and c.id == cat:
+                return theory
+        return "all"
+
+    @staticmethod
+    def snapshot(msg: discord.Message) -> str:
+        text = msg.content or ""
+        if not text and msg.embeds:
+            e = msg.embeds[0]
+            text = "\n".join(x for x in (e.title, e.description) if x)
+        if msg.attachments:
+            text += "\n📎 " + ", ".join(a.filename for a in msg.attachments[:5])
+        return text.strip()[:1500]
+
+    async def post_reminder(self, target: str, link: str, snapshot: str, note: str = ""):
+        admin = self.bot.get_cog("Admin")
+        kind, val = admin.resolve_target(target)
+        ch, roles, _, label = admin.target_info(kind, val)
+        if ch is None:
+            raise commands.BadArgument("Announcement channel not found.")
+        quoted = "\n".join(f"> {line}" for line in (snapshot or "(no text)").splitlines()[:15])
+        e = discord.Embed(title="⏰ Reminder", color=discord.Color.orange(), timestamp=self.s.now(),
+                          description=((f"**{note}**\n\n" if note else "") + quoted)[:4000])
+        e.set_footer(text=f"{self.s.teacher} · {label}")
+        v = discord.ui.View(timeout=None)
+        v.add_item(discord.ui.Button(label="Open the original message", emoji="🔗", style=discord.ButtonStyle.link,
+                                     url=link))
+        content = " ".join(r.mention for r in roles if r) or None
+        await ch.send(content=content, embed=e, view=v)
+
+    async def ctx_set_reminder(self, interaction: discord.Interaction, message: discord.Message):
+        if not self.bot.is_admin(interaction.user):
+            await interaction.response.send_message("Only the teacher can set reminders.", ephemeral=True)
+            return
+        await interaction.response.send_modal(ReminderModal(self, message.jump_url))
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if getattr(self, "_synced", False):
+            return
+        self._synced = True
+        g = self.bot.main_guild()
+        if not g:
+            return
+        try:
+            self.bot.tree.copy_global_to(guild=g)
+            await self.bot.tree.sync(guild=g)
+        except discord.HTTPException as e:
+            log.warning("Could not register the right-click menu (re-invite the bot with "
+                        "'applications.commands' scope): %s", e)
+
     # ------------------------------------------------------------ scheduled announcements
     def parse_when(self, raw: str):
         now = self.s.now()
@@ -820,10 +977,11 @@ class Panel(commands.Cog):
         except (ValueError, TypeError):
             return None
 
-    def add_schedule(self, targets, text, title, ping, when, by):
+    def add_schedule(self, targets, text, title, ping, when, by, kind="announce", link="", snapshot=""):
         jid = secrets.token_hex(3)
         self.jobs[jid] = {"targets": targets, "text": text, "title": title, "ping": ping,
-                          "when": when.isoformat(timespec="minutes"), "by": by}
+                          "when": when.isoformat(timespec="minutes"), "by": by,
+                          "kind": kind, "link": link, "snapshot": snapshot}
         self.save_jobs()
         return jid
 
@@ -835,8 +993,10 @@ class Panel(commands.Cog):
             return "🗓️ No scheduled announcements. (Create one with 📢 Announce → fill the *Schedule* box.)"
         lines = ["🗓️ **Scheduled announcements** — select to cancel:"]
         for jid, j in sorted(self.jobs.items(), key=lambda x: x[1]["when"]):
-            lines.append(f"• `{jid}` **{datetime.fromisoformat(j['when']):%a %d %b %H:%M}** → {', '.join(j['targets'])}"
-                         f" — {(j['text'] or '')[:60]}")
+            icon = "⏰" if j.get("kind") == "reminder" else "📢"
+            preview = (j.get("text") or j.get("snapshot") or "")[:60].replace("\n", " ")
+            lines.append(f"• {icon} `{jid}` **{datetime.fromisoformat(j['when']):%a %d %b %H:%M}** → "
+                         f"{', '.join(j['targets'])} — {preview}")
         return "\n".join(lines)
 
     @commands.command(name="scheduled")
@@ -868,6 +1028,14 @@ class Panel(commands.Cog):
 
             for t in j["targets"]:
                 try:
+                    if j.get("kind") == "reminder":
+                        snap = j.get("snapshot", "")
+                        try:  # use the newest text if the message was edited
+                            snap = self.snapshot(await self.resolve_message(log_ch.guild, j["link"]))
+                        except commands.BadArgument:
+                            pass
+                        await self.post_reminder(t, j["link"], snap, j.get("text", ""))
+                        continue
                     await admin._announce(_Ctx, t, j["text"], j["ping"], title=j.get("title") or "📢 Announcement")
                 except Exception as e:  # noqa: BLE001
                     await log_ch.send(f"⚠️ Scheduled post `{jid}` → {t} failed: {e}")

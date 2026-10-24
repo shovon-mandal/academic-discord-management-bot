@@ -28,6 +28,14 @@
 
   "attendance_min_percent": 0,
 
+  "routine": {
+    "sheet_url": "https://docs.google.com/spreadsheets/d/1NUCjsCxb4nLH9ORbacA_R4FycFohhBCksa6PTD9I8PA/edit?gid=1884702484#gid=1884702484",
+    "sheets": ["CSE", "ECSE"],
+    "teacher_initial": "SM",
+    "scope": "my_courses",
+    "auto_check_hours": 6
+  },
+
   "auto_update": {
     "enabled": true,
     "check_minutes": 5
@@ -69,7 +77,8 @@
       { "key": "general", "name": "💬┃general-text", "type": "text", "student_write": true, "topic": "Students can write, attach files and create threads here" },
       { "key": "resources", "name": "📚┃resources", "type": "text", "student_write": false },
       { "key": "marks", "name": "📊┃marks-sheet", "type": "text", "student_write": false },
-      { "key": "presentation", "name": "🎞️┃presentation-slide", "type": "text", "student_write": true, "topic": "Upload your presentation slides here" }
+      { "key": "presentation", "name": "🎞️┃presentation-slide", "type": "text", "student_write": true, "topic": "Upload your presentation slides here" },
+      { "key": "routine", "name": "🗓️┃routine", "type": "text", "student_write": false, "topic": "Latest class routine (pinned). Updated automatically from the department routine." }
     ],
 
     "lab": [

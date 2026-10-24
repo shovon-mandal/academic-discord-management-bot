@@ -49,6 +49,12 @@ HELP = [
         ("marks_dm <title>", "Send each student their own marks (attach CSV/Excel)", "!marks_dm CT-1 Marks  + attach ct1.xlsx"),
         ("scheduled", "List / cancel scheduled announcements", "!scheduled"),
     ]),
+    ("🗓️ Routine & reminders", [
+        ("routine_check", "Read the routine sheet, update pinned routines, announce changes", "!routine_check"),
+        ("routine [sec]", "Show the saved routine", "!routine 2C"),
+        ("routine_repost", "Re-post every section's pinned routine", "!routine_repost"),
+        ("(right-click a message → Apps → ⏰ Set reminder)", "Re-announce a message now or later", "deadline / CT reminder"),
+    ]),
     ("🗓️ Attendance", [
         ("att_start <sec> [course] [minutes]", "Start voice attendance", "!att_start 2C 15  ·  !att_start 3D CSE2110"),
         ("att_stop <sec>", "Stop + get CSV", "!att_stop 2C"),
@@ -83,7 +89,8 @@ class Admin(commands.Cog):
         out = []
         colors = [BLUE, GREEN, GOLD, discord.Color.teal(), discord.Color.dark_grey()]
         for i, (title, cmds) in enumerate(HELP):
-            body = "\n".join(f"**`{p}{c}`** — {d}\n↳ e.g. `{ex}`" for c, d, ex in cmds)
+            body = "\n".join((f"**{c}** — {d}" if c.startswith("(") else f"**`{p}{c}`** — {d}\n↳ e.g. `{ex}`")
+                              for c, d, ex in cmds)
             e = discord.Embed(title=title, description=body[:4000], color=colors[i % len(colors)])
             out.append(e)
         out[0].set_author(name="🛠️ Admin commands — only you can see this channel")
