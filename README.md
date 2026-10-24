@@ -59,10 +59,28 @@ data/students/CSE1206_2C.csv   ...
 The CSV files open directly in Excel. The JSON files are for scripts.
 **`!excel`** sends one `.xlsx` file with a Summary sheet and one sheet for each course and section (`!excel 2C` or `!excel CSE1205` for just one).
 
-### 🗓️ Voice attendance
-- `!att_start 2C 15` opens attendance for 15 minutes. Students who join a voice channel of that section are marked present.
-- When it stops, the bot posts a CSV with Present and Absent.
-- `!att_report 2C` gives the percentage for each student over the semester and shows who is below 60%.
+### 🎛️ Button control panel
+A control panel with **25 buttons** is pinned in `🛠️┃admin`. Each button opens a private menu where you pick the section, course, time or student from dropdowns and fill a short form, so you don't need to remember any commands.
+
+| Row | Buttons |
+|---|---|
+| 📢 Communication | Announce (multiple targets, custom title, **schedule for later**) · DM students · Scheduled posts · Invite link · Marks/roster upload help |
+| 🗓️ Attendance | Start (section → course → auto-stop time) · Stop · Running now · Attendance report · Stats |
+| 🎓 Students | Student list · Excel · Find · Pending · Remind unverified |
+| 👤 Members | Verify · Move section · Rename · Unverify · Kick unverified |
+| ⚙️ System | Re-post welcome · Backup · Status · Update · Restart |
+
+`!setup_server` and `!reset_server` are **text only**. Both show a warning with **Yes / Cancel** buttons before doing anything.
+
+### 🗓️ Voice attendance with time tracking
+- Start it from the panel (▶️) or with `!att_start 2C 15`. Students who join any voice channel of that section are marked present.
+- The bot records **when each student joined and left, and how long they stayed** (leaving and rejoining is counted correctly).
+- When attendance stops (by button, command or auto-stop), the bot posts an **Excel sheet** showing class date, start and stop time, class duration, and for each student: Present/Absent, first join, last leave, minutes in class, % of class time, and number of joins.
+- The **attendance report** (📈) is an Excel file with one column per class (`P (42m)` / `A`) plus total and %. Students below 60% are highlighted.
+- Optional: set `attendance_min_percent` (e.g. `50`) so a student must stay at least that % of the class to count as present.
+
+### 📊 Marks by private DM
+`!marks_dm CT-1 Marks` with a CSV or Excel file attached sends every student **only their own row** of marks by DM.
 
 ### 📢 Messages
 - `!announce 2C …`, `!announce 2C:lab …`, `!announce CSE1205 …`, `!announce all …` post an announcement and ping the students (attachments are included).
@@ -163,36 +181,46 @@ After 1–3 minutes, go to `🛠️┃admin` and type `!help`. Then run `!invite
 ## 🛠️ Admin commands
 Commands work only in `🛠️┃admin` or `📜┃bot-logs`, and only for the teacher.
 
-| Command | What it does |
-|---|---|
-| `!help` | Shows all commands |
-| `!setup_server` | Creates or updates all roles and channels |
-| `!reset_server confirm` | ⚠️ Deletes everything and builds a fresh server |
-| `!setup_welcome` | Re-posts the welcome buttons and section welcome messages |
-| `!invite` | Invite link and join guide to share |
-| `!stats` | Student count per section and course |
-| `!list 2C` | All students of a section |
-| `!find <id or name>` | Searches for a student |
-| `!verify @user 2C <id> <name>` | Verifies a student manually |
-| `!unverify @user` | Removes access and the record |
-| `!move @user 3D` | Changes a student's section |
-| `!rename @user <name>` | Fixes a student's name and nickname |
-| `!pending` | Requests waiting for approval |
-| `!notify_unverified` | Reminds unverified members by DM and mention |
-| `!kick_unverified <days> [confirm]` | Lists or kicks members who never verified |
-| `!roster_upload 2C` (+ CSV file) | Uploads the official class list |
-| `!missing 2C` | Students on the roster who haven't joined |
-| `!announce <target> <text>` | Announcement with ping. Target: `all`, `2C`, `2C:lab`, `CSE1205` |
-| `!announce_silent <target> <text>` | The same, without the ping |
-| `!dm <target> <text>` | DM to every student of the target |
-| `!att_start 2C [CSE1206] [minutes]` | Starts voice attendance |
-| `!att_stop 2C` / `!att_status` | Stops attendance and gets the CSV / shows running sessions |
-| `!att_report 2C [course]` | Attendance percentage for the semester |
-| `!excel [all \| 2C \| CSE1205 \| CSE1205 2C]` | Student list as one Excel file |
-| `!export [all \| 2C \| CSE1205 \| CSE1205 2C]` | Downloads student files (CSV/JSON) |
-| `!backup` | Zip of all data |
-| `!status` / `!logs [n]` | Bot health / last log lines |
-| `!update` / `!restart` | Pulls from GitHub and restarts / restarts only |
+| Command | What it does | Example |
+|---|---|---|
+| **🏗️ Setup** | | |
+| `!panel` | Re-post the button control panel | `!panel` |
+| `!setup_server` | Create / sync all channels & roles (asks to confirm) | `!setup_server` |
+| `!setup_welcome` | Re-post welcome buttons + instructor cards | `!setup_welcome` |
+| `!invite` | Invite link + join guide for students | `!invite` |
+| `!reset_server` | ⚠️ Delete EVERYTHING, build fresh (asks to confirm) | `!reset_server` |
+| **🎓 Students** | | |
+| `!stats` | Count per section & course | `!stats` |
+| `!list <sec>` | All students of a section | `!list 2C` |
+| `!find <id/name>` | Search a student | `!find 11250121964  ·  !find Rahim` |
+| `!verify @user <sec> <id> <name>` | Verify manually | `!verify @rahim 2C 11250121964 Rahim Uddin` |
+| `!unverify @user` | Remove access + record | `!unverify @rahim` |
+| `!move @user <sec>` | Change section | `!move @rahim 2D` |
+| `!rename @user <name>` | Fix name / nickname | `!rename @rahim Md Rahim Uddin` |
+| `!pending` | Requests waiting for approval | `!pending` |
+| `!notify_unverified` | Remind unverified members | `!notify_unverified` |
+| `!kick_unverified <days> [confirm]` | List / kick never-verified | `!kick_unverified 7  →  !kick_unverified 7 confirm` |
+| `!roster_upload <sec>` | Upload official list (attach CSV) | `!roster_upload 2C  + attach 2C.csv` |
+| `!missing <sec>` | Roster students not joined yet | `!missing 2C` |
+| **📢 Communication** | | |
+| `!announce <target> <text>` | Post + ping (all / 2C / 2C:lab / CSE1205) | `!announce 2C Class test on Sunday at 10 AM` |
+| `!announce_silent <target> <text>` | Same, no ping | `!announce_silent all Slides are uploaded` |
+| `!dm <target> <text>` | DM every student | `!dm 4P Tomorrow's class is online` |
+| `!marks_dm <title>` | Send each student their own marks (attach CSV/Excel) | `!marks_dm CT-1 Marks  + attach ct1.xlsx` |
+| `!scheduled` | List / cancel scheduled announcements | `!scheduled` |
+| **🗓️ Attendance** | | |
+| `!att_start <sec> [course] [minutes]` | Start voice attendance | `!att_start 2C 15  ·  !att_start 3D CSE2110` |
+| `!att_stop <sec>` | Stop + get CSV | `!att_stop 2C` |
+| `!att_status` | Running sessions | `!att_status` |
+| `!att_report <sec> [course]` | Semester % per student | `!att_report 2C CSE1205` |
+| **💾 Data & System** | | |
+| `!excel [target]` | Student list as Excel | `!excel  ·  !excel 2C  ·  !excel CSE2217` |
+| `!export [target]` | Student CSV/JSON files | `!export CSE1205 2C` |
+| `!backup` | Zip of all data | `!backup` |
+| `!status` | Uptime, CPU temp, RAM | `!status` |
+| `!logs [lines]` | Last log lines | `!logs 50` |
+| `!update` | Pull from GitHub + restart | `!update` |
+| `!restart` | Restart the bot | `!restart` |
 
 ---
 
@@ -219,6 +247,7 @@ That's it. Within 5 minutes the bot pulls the change and restarts by itself (or 
 | `roster_check` | `true` sends IDs that are not on the roster to the teacher for approval |
 | `nickname_format` | Default `{last4}_{section}_{name}` (`{id}` also works) |
 | `daily_backup.time` | Backup time (local time, see `utc_offset_hours`) |
+| `attendance_min_percent` | Minimum % of class time to count as present (0 = any join) |
 | `auto_update` | `enabled` and `check_minutes` for automatic updates from GitHub |
 
 To add a section or course next semester, edit `config.json`, push, then run `!update` and `!setup_server`.
@@ -235,7 +264,8 @@ cogs/
   server_setup.py       !setup_server, !reset_server
   verification.py       welcome, buttons, form, verification, section welcome
   admin.py              admin commands
-  attendance.py         voice attendance
+  attendance.py         voice attendance + time tracking + Excel
+  panel.py              button control panel, scheduled announcements
   maintenance.py        backup, status, logs, update, restart
 scripts/                Windows .bat files, Linux installer, systemd helper
 data/                   student records, attendance, roster (private, not in git)

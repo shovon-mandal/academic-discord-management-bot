@@ -603,9 +603,9 @@ class Verification(commands.Cog):
             await self._post_pinned(wc, embed=self.welcome_embed(guild), view=SectionView(self.s))
         if idc:
             await self._post_pinned(idc, embed=self.id_embed())
-        admin_cog = self.bot.get_cog("Admin")
-        if adm and admin_cog:
-            await self._post_pinned(adm, only_pinned=True, embed=admin_cog.help_embed())
+        panel = self.bot.get_cog("Panel")
+        if adm and panel:
+            await panel.post_panel(adm)
         await self.post_section_welcomes(guild)
 
     # ---- instructor card (shown in every announcement channel) ----

@@ -33,6 +33,7 @@ EXTENSIONS = (
     "cogs.admin",
     "cogs.attendance",
     "cogs.maintenance",
+    "cogs.panel",
 )
 
 log = logging.getLogger("nubtk")
@@ -163,7 +164,7 @@ class ClassBot(commands.Bot):
             return False
         if not self.is_admin(ctx.author):
             return False
-        if ctx.command and ctx.command.qualified_name in ("setup_server", "reset_server"):
+        if ctx.command and ctx.command.qualified_name in ("setup_server", "reset_server"):  # need confirmation (see server_setup)
             return True  # allowed anywhere (first run: admin channel doesn't exist yet)
         allowed = {c.id for c in (self.channel_for("admin_channel"), self.channel_for("log_channel")) if c}
         return not allowed or ctx.channel.id in allowed

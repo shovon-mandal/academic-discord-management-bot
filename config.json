@@ -26,6 +26,8 @@
   "id_channel_slowmode_seconds": 5,
   "course_group_categories": true,
 
+  "attendance_min_percent": 0,
+
   "auto_update": {
     "enabled": true,
     "check_minutes": 5

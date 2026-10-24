@@ -20,8 +20,28 @@ class ServerSetup(commands.Cog):
         self.s = bot.settings
 
     # ------------------------------------------------------------ command
+    async def _ask(self, ctx, title, text, label, run, danger=True):
+        from cogs.panel import ConfirmView  # local import to avoid a cycle at load time
+
+        async def go(interaction):
+            await run(ctx)
+        embed = discord.Embed(title=title, description=text,
+                              color=discord.Color.red() if danger else discord.Color.orange())
+        await ctx.send(embed=embed, view=ConfirmView(self, ctx.author.id, go, label=label, danger=danger, timeout=120))
+
     @commands.command(name="setup_server", aliases=["sync"])
     async def setup_server(self, ctx: commands.Context):
+        await self._ask(
+            ctx, "⚠️ Run server setup / sync?",
+            "This will make the server match **config.json**:\n"
+            "• create missing roles, categories and channels\n"
+            "• rename channels and **reset their permissions** to the config\n"
+            "• **delete channels that were removed from config.json** (their messages are lost)\n"
+            "• re-post welcome buttons, instructor cards and this admin panel\n\n"
+            "Students and their data are NOT affected.",
+            "Yes, run setup", self._run_setup, danger=False)
+
+    async def _run_setup(self, ctx: commands.Context):
         status = await ctx.send("⏳ Building / syncing server structure... (1–3 minutes)")
         try:
             report = await self.build(ctx.guild, status)
@@ -42,12 +62,15 @@ class ServerSetup(commands.Cog):
     @commands.command(name="reset_server")
     async def reset_server(self, ctx: commands.Context, confirm: str = ""):
         """Delete EVERY channel, category and role, then build fresh from config.json."""
-        if confirm.lower() != "confirm":
-            await ctx.send("⚠️ This deletes **ALL channels, categories and roles** in this server "
-                           "(messages inside them are lost) and builds everything fresh.\n"
-                           f"Students who already joined stay in the server but must verify again.\n"
-                           f"Type `{self.s.prefix}reset_server confirm` to continue.")
-            return
+        await self._ask(
+            ctx, "🛑 RESET the whole server?",
+            "This **deletes ALL channels, categories and roles** in this server — every message is lost — "
+            "and builds everything fresh from config.json.\n\n"
+            "Students stay in the server and their records are kept, but they lose their roles and must "
+            "verify again.\n\n**This cannot be undone.**",
+            "Yes, delete everything", self._run_reset, danger=True)
+
+    async def _run_reset(self, ctx: commands.Context):
         guild = ctx.guild
         await ctx.send("🧹 Deleting everything... the new admin channel will appear in 1–3 minutes.")
         for ch in list(guild.channels):

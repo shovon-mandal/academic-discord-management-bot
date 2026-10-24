@@ -18,46 +18,51 @@ from core.system import zip_files
 log = logging.getLogger("nubtk.admin")
 GREEN, RED, GOLD, BLUE = discord.Color.green(), discord.Color.red(), discord.Color.gold(), discord.Color.blurple()
 
+# (command, what it does, example)
 HELP = [
     ("🏗️ Setup", [
-        ("setup_server", "Create / re-sync all roles, categories, channels (safe to re-run)"),
-        ("setup_welcome", "Re-post welcome buttons + ID instructions"),
-        ("reset_server confirm", "⚠️ Delete ALL channels/roles and build fresh"),
-        ("invite", "Permanent invite link + ready-to-share join guide for students"),
+        ("panel", "Re-post the button control panel", "!panel"),
+        ("setup_server", "Create / sync all channels & roles (asks to confirm)", "!setup_server"),
+        ("setup_welcome", "Re-post welcome buttons + instructor cards", "!setup_welcome"),
+        ("invite", "Invite link + join guide for students", "!invite"),
+        ("reset_server", "⚠️ Delete EVERYTHING, build fresh (asks to confirm)", "!reset_server"),
     ]),
     ("🎓 Students", [
-        ("stats", "Section & course-wise counts"),
-        ("list <sec>", "All students of a section (e.g. `!list 2C`)"),
-        ("find <id/name>", "Search a student"),
-        ("verify @user <sec> <id> <name>", "Manually verify"),
-        ("unverify @user", "Remove access + record"),
-        ("move @user <sec>", "Change section"),
-        ("rename @user <name>", "Fix name / nickname"),
-        ("pending", "Requests waiting for approval"),
-        ("notify_unverified", "Check ID channel, then DM + mention unverified"),
-        ("kick_unverified <days> [confirm]", "List / kick members unverified for N days"),
-        ("roster_upload <sec>", "Attach official CSV (ID,Name) → enables roster checks"),
-        ("missing <sec>", "Roster students who haven't joined yet"),
+        ("stats", "Count per section & course", "!stats"),
+        ("list <sec>", "All students of a section", "!list 2C"),
+        ("find <id/name>", "Search a student", "!find 11250121964  ·  !find Rahim"),
+        ("verify @user <sec> <id> <name>", "Verify manually", "!verify @rahim 2C 11250121964 Rahim Uddin"),
+        ("unverify @user", "Remove access + record", "!unverify @rahim"),
+        ("move @user <sec>", "Change section", "!move @rahim 2D"),
+        ("rename @user <name>", "Fix name / nickname", "!rename @rahim Md Rahim Uddin"),
+        ("pending", "Requests waiting for approval", "!pending"),
+        ("notify_unverified", "Remind unverified members", "!notify_unverified"),
+        ("kick_unverified <days> [confirm]", "List / kick never-verified", "!kick_unverified 7  →  !kick_unverified 7 confirm"),
+        ("roster_upload <sec>", "Upload official list (attach CSV)", "!roster_upload 2C  + attach 2C.csv"),
+        ("missing <sec>", "Roster students not joined yet", "!missing 2C"),
     ]),
     ("📢 Communication", [
-        ("announce <target> <text>", "Post + ping. target = `all` / `2C` / `2C:lab` / `CSE1205`"),
-        ("announce_silent <target> <text>", "Same, without ping"),
-        ("dm <target> <text>", "DM every student of the target"),
+        ("announce <target> <text>", "Post + ping (all / 2C / 2C:lab / CSE1205)",
+         "!announce 2C Class test on Sunday at 10 AM"),
+        ("announce_silent <target> <text>", "Same, no ping", "!announce_silent all Slides are uploaded"),
+        ("dm <target> <text>", "DM every student", "!dm 4P Tomorrow's class is online"),
+        ("marks_dm <title>", "Send each student their own marks (attach CSV/Excel)", "!marks_dm CT-1 Marks  + attach ct1.xlsx"),
+        ("scheduled", "List / cancel scheduled announcements", "!scheduled"),
     ]),
-    ("🗓️ Attendance (voice)", [
-        ("att_start <sec> [course] [minutes]", "Start session — join section voice = present"),
-        ("att_stop <sec>", "Stop + get CSV"),
-        ("att_status", "Running sessions"),
-        ("att_report <sec> [course]", "Whole-semester % per student"),
+    ("🗓️ Attendance", [
+        ("att_start <sec> [course] [minutes]", "Start voice attendance", "!att_start 2C 15  ·  !att_start 3D CSE2110"),
+        ("att_stop <sec>", "Stop + get CSV", "!att_stop 2C"),
+        ("att_status", "Running sessions", "!att_status"),
+        ("att_report <sec> [course]", "Semester % per student", "!att_report 2C CSE1205"),
     ]),
     ("💾 Data & System", [
-        ("excel [all | 2C | CSE1205 | CSE1205 2C]", "📗 Student list as one Excel file (sheet per course+section)"),
-        ("export [all | 2C | CSE1205 | CSE1205 2C]", "Download student files (CSV/JSON)"),
-        ("backup", "Zip of all data"),
-        ("status", "Uptime, CPU temp, RAM, git version"),
-        ("logs [lines]", "Last log lines"),
-        ("update", "git pull from GitHub + restart"),
-        ("restart", "Restart the bot"),
+        ("excel [target]", "Student list as Excel", "!excel  ·  !excel 2C  ·  !excel CSE2217"),
+        ("export [target]", "Student CSV/JSON files", "!export CSE1205 2C"),
+        ("backup", "Zip of all data", "!backup"),
+        ("status", "Uptime, CPU temp, RAM", "!status"),
+        ("logs [lines]", "Last log lines", "!logs 50"),
+        ("update", "Pull from GitHub + restart", "!update"),
+        ("restart", "Restart the bot", "!restart"),
     ]),
 ]
 
@@ -72,13 +77,20 @@ class Admin(commands.Cog):
     def ver(self):
         return self.bot.get_cog("Verification")
 
-    def help_embed(self) -> discord.Embed:
+    def help_embeds(self) -> list:
+        """One embed per group; every command shows an example."""
         p = self.s.prefix
-        e = discord.Embed(title="🛠️ Admin commands", color=BLUE,
-                          description="Only you can see this channel. Commands work only here.")
-        for title, cmds in HELP:
-            e.add_field(name=title, value="\n".join(f"`{p}{c}` — {d}" for c, d in cmds)[:1024], inline=False)
-        return e
+        out = []
+        colors = [BLUE, GREEN, GOLD, discord.Color.teal(), discord.Color.dark_grey()]
+        for i, (title, cmds) in enumerate(HELP):
+            body = "\n".join(f"**`{p}{c}`** — {d}\n↳ e.g. `{ex}`" for c, d, ex in cmds)
+            e = discord.Embed(title=title, description=body[:4000], color=colors[i % len(colors)])
+            out.append(e)
+        out[0].set_author(name="🛠️ Admin commands — only you can see this channel")
+        return out
+
+    def help_embed(self) -> discord.Embed:
+        return self.help_embeds()[0]
 
     async def send_long(self, ctx, text: str, filename: str | None = None):
         if len(text) > 6000 and filename:
@@ -160,7 +172,7 @@ class Admin(commands.Cog):
     # ------------------------------------------------------------ help / stats
     @commands.command(name="help", aliases=["commands"])
     async def help_cmd(self, ctx):
-        await ctx.send(embed=self.help_embed())
+        await ctx.send(embeds=self.help_embeds())
 
     @commands.command(name="stats")
     async def stats(self, ctx):
@@ -346,7 +358,7 @@ class Admin(commands.Cog):
         await self.send_long(ctx, "\n".join(lines), filename=f"{sec}_missing.txt")
 
     # ------------------------------------------------------------ communication
-    async def _announce(self, ctx, target: str, text: str, ping: bool):
+    async def _announce(self, ctx, target: str, text: str, ping: bool, title: str = "📢 Announcement"):
         kind, val = self.resolve_target(target)
         if not kind:
             raise commands.BadArgument("Target must be `all`, a section like `2C`, `2C:lab`, or a course like `CSE1205`.")
@@ -356,7 +368,8 @@ class Admin(commands.Cog):
         if not text and not ctx.message.attachments:
             raise commands.BadArgument("Write the announcement text after the target.")
         files = [await a.to_file() for a in ctx.message.attachments[:10]]
-        embed = discord.Embed(title="📢 Announcement", description=text or None, color=GOLD, timestamp=self.s.now())
+        embed = discord.Embed(title=title or "📢 Announcement", description=text or None, color=GOLD,
+                              timestamp=self.s.now())
         embed.set_footer(text=f"{self.s.teacher} · {label}")
         content = " ".join(r.mention for r in roles if r) if ping else None
         kwargs = {"embed": embed}
@@ -399,6 +412,63 @@ class Admin(commands.Cog):
             await asyncio.sleep(1.0)
         await status.edit(content=f"✅ DM sent: **{sent}** · failed: **{len(failed)}**"
                                   + (f"\nFailed: {', '.join(failed[:30])}" if failed else ""))
+
+    # ------------------------------------------------------------ marks by DM
+    @commands.command(name="marks_dm")
+    async def marks_dm(self, ctx, *, title: str = "Your marks"):
+        """Attach a CSV/XLSX: one row per student, a column with the Student ID, other columns = marks."""
+        if not ctx.message.attachments:
+            raise commands.BadArgument("Attach a CSV or Excel file (first row = column names, one column = Student ID).")
+        att = ctx.message.attachments[0]
+        raw = await att.read()
+        rows = []
+        if att.filename.lower().endswith((".xlsx", ".xlsm")):
+            from openpyxl import load_workbook
+            wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+            for r in wb.active.iter_rows(values_only=True):
+                rows.append(["" if v is None else str(v).strip() for v in r])
+        else:
+            import csv as _csv
+            rows = [[c.strip() for c in r] for r in _csv.reader(io.StringIO(raw.decode("utf-8-sig", errors="replace")))]
+        rows = [r for r in rows if any(r)]
+        if len(rows) < 2:
+            raise commands.BadArgument("The file needs a header row and at least one student row.")
+        header = rows[0]
+        id_re = re.compile(rf"^\d{{{self.s.id_length}}}$")
+        id_col = next((i for i in range(len(header)) if any(id_re.match(r[i]) for r in rows[1:] if i < len(r))), None)
+        if id_col is None:
+            raise commands.BadArgument(f"No column with {self.s.id_length}-digit Student IDs found.")
+        by_sid = {}
+        for rec in self.bot.store.all_active():
+            by_sid.setdefault(rec["student_id"], rec)
+        status = await ctx.send(f"⏳ Sending marks to {len(rows) - 1} students...")
+        sent, failed, unknown = 0, [], []
+        for r in rows[1:]:
+            sid = r[id_col] if id_col < len(r) else ""
+            rec = by_sid.get(sid)
+            if not rec:
+                unknown.append(sid)
+                continue
+            m = ctx.guild.get_member(int(rec["discord_id"]))
+            if not m:
+                failed.append(sid)
+                continue
+            e = discord.Embed(title=f"📊 {title}", color=BLUE, timestamp=self.s.now(),
+                              description=f"**{rec['name']}** · `{sid}` · Section {rec['section']}")
+            for i, h in enumerate(header[:25]):
+                if i != id_col and i < len(r) and h:
+                    e.add_field(name=h[:256], value=(r[i] or "-")[:1024], inline=True)
+            e.set_footer(text=f"{self.s.teacher} · private — only you can see this")
+            try:
+                await m.send(embed=e)
+                sent += 1
+            except discord.HTTPException:
+                failed.append(sid)
+            await asyncio.sleep(0.8)
+        await status.edit(content=(f"✅ Marks sent: **{sent}** · DM closed/failed: **{len(failed)}** · "
+                                   f"ID not registered: **{len(unknown)}**"
+                                   + (f"\nNot registered: {', '.join(unknown[:40])}" if unknown else "")
+                                   + (f"\nFailed: {', '.join(failed[:40])}" if failed else "")))
 
     # ------------------------------------------------------------ excel
     def _pairs(self, target: str):
