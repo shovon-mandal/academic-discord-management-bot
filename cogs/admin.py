@@ -50,6 +50,9 @@ HELP = [
         ("scheduled", "List / cancel scheduled announcements", "!scheduled"),
     ]),
     ("🗓️ Routine & reminders", [
+        ("today", "My classes today: section, course, time, room", "!today"),
+        ("tomorrow", "My classes tomorrow", "!tomorrow"),
+        ("week", "My whole weekly routine", "!week"),
         ("routine_check", "Update routine: check the online sheet, update pinned routines, announce changes", "!routine_check"),
         ("routine [sec] [all|mine]", "Show saved routine: full section / only my classes", "!routine 3D  ·  !routine 3D mine"),
         ("routine_repost", "Re-post every section's pinned routine", "!routine_repost"),

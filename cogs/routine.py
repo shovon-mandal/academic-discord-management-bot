@@ -191,14 +191,24 @@ class Routine(commands.Cog):
         self.state: dict = load_json(STATE_FILE, {})
         hours = float(cfg.get("auto_check_hours", 6) or 0)
         self.auto = tasks.loop(hours=hours)(self._auto) if hours > 0 else None
+        brief = str(cfg.get("daily_brief_time", "07:30") or "")
+        self.brief = None
+        if re.fullmatch(r"\d{1,2}:\d{2}", brief):
+            from datetime import time as dtime
+            h, m = (int(x) for x in brief.split(":"))
+            self.brief = tasks.loop(time=dtime(hour=h, minute=m, tzinfo=self.s.tz))(self._daily_brief)
 
     async def cog_load(self):
         if self.auto:
             self.auto.start()
+        if self.brief:
+            self.brief.start()
 
     async def cog_unload(self):
         if self.auto:
             self.auto.cancel()
+        if self.brief:
+            self.brief.cancel()
 
     async def _auto(self):
         await self.bot.wait_until_ready()
@@ -368,6 +378,88 @@ class Routine(commands.Cog):
         save_json(STATE_FILE, self.state)
         report = f"🗓️ **Routine check** · effective from **{effective or '—'}**\n" + "\n".join(lines)
         return report, any_changed
+
+    # ------------------------------------------------------------ my classes (today / tomorrow / week)
+    def my_classes(self, day: str) -> list:
+        out = []
+        for sec, st in self.state.items():
+            if sec not in self.s.sections:
+                continue
+            for e in self.mine(st.get("entries", [])):
+                if e["day"] == day:
+                    out.append({**e, "section": sec})
+        out.sort(key=lambda e: (_time_key(e["time"]), e["section"]))
+        return out
+
+    def day_embed(self, day: str, label: str) -> discord.Embed:
+        items = self.my_classes(day)
+        ours = {info["code"].upper(): info for info in self.s.courses.values()}
+        e = discord.Embed(title=f"📅 {label} — {day}", color=discord.Color.gold(), timestamp=self.s.now())
+        if not items:
+            e.description = "🎉 No classes."
+            return e
+        lines = []
+        for it in items:
+            info = ours.get(it["course"], {})
+            lab = " 🧪" if info.get("type") == "lab" else ""
+            eve = " (Evening)" if self.s.is_evening(it["section"]) else ""
+            lines.append(f"🕘 **{it['time']}**\n"
+                         f"   **{it['course']}** {info.get('short', '')}{lab} · Section **{it['section']}**{eve} · 🏫 Room **{it['room']}**")
+        e.description = "\n".join(lines)[:4000]
+        e.set_footer(text=f"{len(items)} class(es) · from the official routine")
+        return e
+
+    def week_embed(self) -> discord.Embed:
+        e = discord.Embed(title="📆 My weekly routine", color=discord.Color.gold(), timestamp=self.s.now())
+        ours = {info["code"].upper(): info for info in self.s.courses.values()}
+        total = 0
+        for day in DAYS:
+            items = self.my_classes(day)
+            if not items:
+                continue
+            total += len(items)
+            e.add_field(name=f"📅 {day}", inline=False, value="\n".join(
+                f"`{it['time']}` **{it['course']}** {ours.get(it['course'], {}).get('short', '')} · "
+                f"{it['section']} · 🏫 {it['room']}" for it in items)[:1024])
+        e.description = f"{total} classes per week" if total else "No classes found."
+        return e
+
+    async def _ensure_state(self):
+        if not self.state:
+            await self.check()
+
+    def _today(self, offset: int = 0) -> str:
+        from datetime import timedelta
+        d = self.s.now() + timedelta(days=offset)
+        return d.strftime("%A")
+
+    async def _daily_brief(self):
+        await self.bot.wait_until_ready()
+        ch = self.bot.channel_for("admin_channel")
+        if not ch or not self.state:
+            return
+        day = self._today()
+        if not self.my_classes(day):
+            return  # no message on days without classes
+        try:
+            await ch.send(content="☀️ Good morning! Your classes today:", embed=self.day_embed(day, "Today"))
+        except discord.HTTPException:
+            pass
+
+    @commands.command(name="today")
+    async def today_cmd(self, ctx):
+        await self._ensure_state()
+        await ctx.send(embed=self.day_embed(self._today(), "Today"))
+
+    @commands.command(name="tomorrow")
+    async def tomorrow_cmd(self, ctx):
+        await self._ensure_state()
+        await ctx.send(embed=self.day_embed(self._today(1), "Tomorrow"))
+
+    @commands.command(name="week")
+    async def week_cmd(self, ctx):
+        await self._ensure_state()
+        await ctx.send(embed=self.week_embed())
 
     # ------------------------------------------------------------ commands
     @commands.command(name="routine_check")

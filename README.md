@@ -69,7 +69,7 @@ A control panel is posted in `🛠️┃admin`: **one message per row**, each li
 | 🎓 Students | Student list · Excel · Find · Pending · Remind unverified |
 | 👤 Members | Verify · Move section · Rename · Unverify · Kick unverified |
 | ⚙️ System | Re-post welcome · Backup · Status · Update · Restart |
-| 🗓️ Routine & reminders | Update routine · Show routine · Remind a message |
+| 🗓️ Routine & reminders | Update routine · Show routine · My classes today · My week · Remind a message |
 | 📖 Help | All commands · Show panel here |
 
 `!setup_server` and `!reset_server` are **text only**. Both show a warning with **Yes / Cancel** buttons before doing anything.
@@ -88,6 +88,10 @@ A control panel is posted in `🛠️┃admin`: **one message per row**, each li
   - **👨‍🏫 Classes with SM** (only your classes: day, time, course, room)
 - Click **🔄 Update routine** — in the panel or right under the pinned routine (or `!routine_check`). The bot also checks automatically every 6 hours. If anything changed, it replaces the pinned routine and posts what changed (➕ new / ➖ removed) with a ping.
 - The sheet must be shared as **Anyone with the link → Viewer**.
+
+### 📅 My classes today
+- **📅 My classes today** (panel) or `!today` / `!tomorrow` / `!week`: which section, course, time and room — straight from the routine.
+- Every morning at **07:30** (`routine.daily_brief_time`) the bot posts today's classes in `🛠️┃admin` (nothing on days off).
 
 ### ⏰ Reminders for any message
 Re-announce an existing message (assignment deadline, CT notice…) now or later:

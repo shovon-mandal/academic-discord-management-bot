@@ -618,6 +618,8 @@ PANEL_GROUPS = [
     ("Row 6 · 🗓️ Routine & reminders", discord.Color.purple(), [
         ("routine_check", "Update routine", "🔄", B.success, "Checks the online routine sheet now → updates every section's pinned 🗓️┃routine and posts what changed."),
         ("routine_show", "Show routine", "🗓️", B.secondary, "Show the saved routine of every section here."),
+        ("today", "My classes today", "📅", B.success, "Which section, which course, what time and which room — today."),
+        ("week", "My week", "📆", B.secondary, "Your whole weekly routine (all sections)."),
         ("reminder", "Remind a message", "⏰", B.primary, "Paste a message link → re-announce it now or later (deadline, CT…). Tip: right-click a message → Apps → ⏰ Set reminder."),
     ]),
     ("Row 7 · 📖 Help", discord.Color.teal(), [
@@ -791,6 +793,19 @@ class Panel(commands.Cog):
             except Exception as e:  # noqa: BLE001
                 log.exception("routine check failed")
                 await interaction.followup.send(f"❌ Routine check failed: `{str(e)[:300]}`", ephemeral=True)
+            return
+        if key in ("today", "week"):
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            r = self.bot.get_cog("Routine")
+            try:
+                await r._ensure_state()
+            except Exception as e:  # noqa: BLE001
+                await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
+                return
+            emb = r.day_embed(r._today(), "Today") if key == "today" else r.week_embed()
+            await interaction.followup.send(embed=emb, ephemeral=True)
+            if key == "today":
+                await interaction.followup.send(embed=r.day_embed(r._today(1), "Tomorrow"), ephemeral=True)
             return
         if key == "routine_show":
             await quick("routine")
