@@ -648,11 +648,13 @@ class Verification(commands.Cog):
         initial = f" ({ins['initial']})" if ins.get("initial") else ""
         return f"I am **{name}{initial}**, your course instructor. 🙂"
 
-    def _invite_block(self, courses_text: str, invite_url: str) -> str:
-        """courses_text e.g. 'CSE 2109 / CSE 2110' — who should be invited."""
+    def _invite_block(self, courses_text: str, invite_url: str, sections=None) -> str:
+        """Who should be invited: course + section(s)."""
         who = f"who take {courses_text}" if courses_text else "who take my courses"
-        return (f"**👥 Invite your classmates {who}**\n"
-                f"Share this link with them (any section):\n```{invite_url or 'ask the teacher for the link'}```")
+        secs = list(sections or [])
+        where = (f"Section {secs[0]}" if len(secs) == 1 else "Sections " + ", ".join(secs)) if secs else ""
+        return (f"**👥 Invite your classmates {who}" + (f" — {where}" if where else "") + "**\n"
+                f"Share this link with them:\n```{invite_url or 'ask the teacher for the link'}```")
 
     def _codes(self, courses) -> str:
         """['CSE2109','CSE2110'] → 'CSE 2109 / CSE 2110 (OOP II)'"""
@@ -669,7 +671,7 @@ class Verification(commands.Cog):
             description=(f"**Your courses:**\n{courses}\n\n"
                          "This server is where we communicate about everything related to these courses — "
                          "announcements, resources, marks, presentations and lab work.\n\n"
-                         f"{self._intro_line()}\n\n" + self._invite_block(self._codes(s.section_courses(sec)), invite_url)),
+                         f"{self._intro_line()}\n\n" + self._invite_block(self._codes(s.section_courses(sec)), invite_url, [sec])),
             color=discord.Color(s.section_color(sec)))
         self._add_instructor_fields(e)
         e.set_footer(text=f"{s.semester} · Section {sec}")
@@ -683,7 +685,7 @@ class Verification(commands.Cog):
             description=(f"**Courses:**\n{courses}\n**Sections:** {', '.join(group['sections'])}\n\n"
                          "This category is shared by all sections of this course — common announcements "
                          "and resources are posted here.\n\n"
-                         f"{self._intro_line()}\n\n" + self._invite_block(self._codes(group["courses"]), invite_url)),
+                         f"{self._intro_line()}\n\n" + self._invite_block(self._codes(group["courses"]), invite_url, group["sections"])),
             color=discord.Color.blurple())
         self._add_instructor_fields(e)
         e.set_footer(text=f"{s.semester} · {', '.join(group['sections'])}")
@@ -697,7 +699,7 @@ class Verification(commands.Cog):
             title=f"👋 Welcome to {s.server_name}!",
             description=(f"**All sections & courses:**\n{lines}\n\n"
                          "This server is where we communicate about everything related to our courses.\n\n"
-                         f"{self._intro_line()}\n\n" + self._invite_block("", invite_url)),
+                         f"{self._intro_line()}\n\n" + self._invite_block("", invite_url, list(s.sections))),
             color=discord.Color.gold())
         self._add_instructor_fields(e)
         e.set_footer(text=s.semester)
