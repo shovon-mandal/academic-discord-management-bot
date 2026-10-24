@@ -50,7 +50,8 @@ HELP = [
         ("scheduled", "List / cancel scheduled announcements", "!scheduled"),
     ]),
     ("🗓️ Routine & reminders", [
-        ("today", "My classes today: section, course, time, room", "!today"),
+        ("today", "My day: classes (section, time, room) + deadlines & tests", "!today"),
+        ("deadlines", "Upcoming deadlines & tests (add them with 📌 in the panel)", "!deadlines"),
         ("tomorrow", "My classes tomorrow", "!tomorrow"),
         ("week", "My whole weekly routine", "!week"),
         ("routine_check", "Update routine: check the online sheet, update pinned routines, announce changes", "!routine_check"),

@@ -309,6 +309,99 @@ class ReminderModal(discord.ui.Modal):
                                         ephemeral=True)
 
 
+class EventMenu(BaseMenu):
+    """📌 Add a deadline / test: choose type + sections, then fill the form."""
+
+    def __init__(self, cog, user_id):
+        super().__init__(cog, user_id)
+        r = cog.bot.get_cog("Routine")
+        self.kind = "assignment"
+        self.secs = []
+        ks = discord.ui.Select(placeholder="1️⃣ What is it?", row=0, options=[
+            discord.SelectOption(label=name, value=k, emoji=icon, default=(k == "assignment"))
+            for k, (name, icon) in r.EVENT_TYPES.items()])
+        ks.callback = self._kind
+        self.add_item(ks)
+        opts = [discord.SelectOption(label="All my sections", value="all", emoji="🏫")] + section_options(cog.s)
+        ss = discord.ui.Select(placeholder="2️⃣ Which section(s)?", row=1, options=opts[:25], min_values=1,
+                               max_values=len(opts[:25]))
+        ss.callback = self._secs
+        self.add_item(ss)
+        b = discord.ui.Button(label="3️⃣ Enter title & date", style=discord.ButtonStyle.success, emoji="✏️", row=2)
+        b.callback = self._go
+        self.add_item(b)
+
+    async def _kind(self, interaction):
+        self.kind = interaction.data["values"][0]
+        await interaction.response.defer()
+
+    async def _secs(self, interaction):
+        self.secs = list(interaction.data["values"])
+        await interaction.response.defer()
+
+    async def _go(self, interaction):
+        if not self.secs:
+            await interaction.response.send_message("Choose the section(s) first.", ephemeral=True)
+            return
+        await interaction.response.send_modal(EventModal(self.cog, self.kind, self.secs, interaction))
+
+
+class EventModal(discord.ui.Modal):
+    def __init__(self, cog, kind, secs, menu):
+        name = cog.bot.get_cog("Routine").EVENT_TYPES[kind][0]
+        super().__init__(title=f"📌 New {name}"[:45], timeout=900)
+        self.cog, self.kind, self.secs, self.menu = cog, kind, secs, menu
+        self.head = discord.ui.TextInput(label="Title", max_length=100, placeholder="e.g. Assignment 2 — Inheritance")
+        self.when = discord.ui.TextInput(label="Date & time (deadline / test time)", max_length=30,
+                                         placeholder="2026-10-30 23:59   or   2026-10-30 (= 11:59 PM)")
+        self.details = discord.ui.TextInput(label="Details (optional)", required=False, max_length=600,
+                                            style=discord.TextStyle.paragraph,
+                                            placeholder="Syllabus: Chapter 3–4 · Submit PDF in general-text")
+        self.announce = discord.ui.TextInput(label="Announce now in the section? (yes / no)", default="yes",
+                                             max_length=3, required=False)
+        for x in (self.head, self.when, self.details, self.announce):
+            self.add_item(x)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = self.when.value.strip()
+        when = self.cog.parse_when(raw) or self.cog.parse_when(raw + " 23:59")
+        if not when:
+            await interaction.response.send_message("⚠️ Could not read the date. Use `2026-10-30 23:59`.", ephemeral=True)
+            return
+        r = self.cog.bot.get_cog("Routine")
+        eid = r.add_event(self.kind, self.head.value.strip(), self.secs, when, (self.details.value or "").strip(),
+                          interaction.user.name)
+        posted = []
+        if (self.announce.value or "yes").strip().lower().startswith("y"):
+            posted = await r.announce_event(eid)
+        await interaction.response.send_message(
+            f"✅ Saved: {r.event_line(when, r._events()[eid], True)}\n"
+            + (f"📢 Announced in: {', '.join(posted)}\n" if posted else "")
+            + "Students see it under 📅 **My section today** in 🗓️┃routine (on the day and 7 days before).",
+            ephemeral=True)
+        await done(self.menu, "✅ Deadline / test saved.")
+
+
+class EventsListMenu(BaseMenu):
+    def __init__(self, cog, user_id, items):
+        super().__init__(cog, user_id)
+        if items:
+            r = cog.bot.get_cog("Routine")
+            opts = [discord.SelectOption(
+                label=f"{w:%d %b %H:%M} · {r.EVENT_TYPES.get(ev['kind'], ('', ''))[0]}: {ev['title']}"[:100],
+                value=eid, description=", ".join(ev["sections"])[:100]) for w, eid, ev in items[:25]]
+            sel = discord.ui.Select(placeholder="Select to delete…", options=opts, min_values=1, max_values=len(opts))
+            sel.callback = self._delete
+            self.add_item(sel)
+
+    async def _delete(self, interaction):
+        r = self.cog.bot.get_cog("Routine")
+        for eid in interaction.data["values"]:
+            r._events().pop(eid, None)
+        r.save_events()
+        await interaction.response.edit_message(content="🗑️ Deleted.", view=None, embed=None)
+
+
 # ====================================================================== attendance
 class AttStartMenu(BaseMenu):
     def __init__(self, cog, user_id):
@@ -618,11 +711,15 @@ PANEL_GROUPS = [
     ("Row 6 · 🗓️ Routine & reminders", discord.Color.purple(), [
         ("routine_check", "Update routine", "🔄", B.success, "Checks the online routine sheet now → updates every section's pinned 🗓️┃routine and posts what changed."),
         ("routine_show", "Show routine", "🗓️", B.secondary, "Show the saved routine of every section here."),
-        ("today", "My classes today", "📅", B.success, "Which section, which course, what time and which room — today."),
+        ("today", "My day", "📅", B.success, "Today & tomorrow (with date): classes, sections, rooms, deadlines and tests."),
         ("week", "My week", "📆", B.secondary, "Your whole weekly routine (all sections)."),
         ("reminder", "Remind a message", "⏰", B.primary, "Paste a message link → re-announce it now or later (deadline, CT…). Tip: right-click a message → Apps → ⏰ Set reminder."),
     ]),
-    ("Row 7 · 📖 Help", discord.Color.teal(), [
+    ("Row 7 · 📌 Deadlines & tests", discord.Color.orange(), [
+        ("event_add", "Add deadline / test", "📌", B.success, "Assignment, CT, quiz, lab report, presentation… → students see it in 📅 My section today."),
+        ("event_list", "Upcoming deadlines", "📋", B.secondary, "See all upcoming deadlines and tests, delete wrong ones."),
+    ]),
+    ("Row 8 · 📖 Help", discord.Color.teal(), [
         ("allcmds", "All commands", "📖", B.primary, "Every text command with an example."),
         ("panel", "Show panel here", "🎛️", B.secondary, "Open this whole panel privately, anywhere."),
     ]),
@@ -793,6 +890,18 @@ class Panel(commands.Cog):
             except Exception as e:  # noqa: BLE001
                 log.exception("routine check failed")
                 await interaction.followup.send(f"❌ Routine check failed: `{str(e)[:300]}`", ephemeral=True)
+            return
+        if key == "event_add":
+            await menu(EventMenu(self, uid), "📌 **Add a deadline / test** — choose type and section(s), then enter title & date.")
+            return
+        if key == "event_list":
+            from datetime import timedelta
+            r = self.bot.get_cog("Routine")
+            now = self.s.now()
+            items = r.events_between(None, now - timedelta(hours=1), now + timedelta(days=60))
+            text = ("📌 **Upcoming deadlines & tests**\n" + "\n".join(r.event_line(w, ev, True) for w, _, ev in items)
+                    if items else "No upcoming deadlines or tests.")
+            await menu(EventsListMenu(self, uid, items), text[:1990])
             return
         if key in ("today", "week"):
             await interaction.response.defer(ephemeral=True, thinking=True)
@@ -983,7 +1092,7 @@ class Panel(commands.Cog):
                 n, unit = int(raw[1:-1]), raw[-1]
                 return now + (timedelta(hours=n) if unit == "h" else timedelta(minutes=n) if unit == "m"
                               else timedelta(days=n) if unit == "d" else None)
-            for fmt in ("%Y-%m-%d %H:%M", "%d-%m-%Y %H:%M", "%d/%m/%Y %H:%M"):
+            for fmt in ("%Y-%m-%d %H:%M", "%d-%m-%Y %H:%M", "%d/%m/%Y %H:%M", "%Y-%m-%d %I:%M %p", "%d-%m-%Y %I:%M %p"):
                 try:
                     return datetime.strptime(raw, fmt).replace(tzinfo=self.s.tz)
                 except ValueError:

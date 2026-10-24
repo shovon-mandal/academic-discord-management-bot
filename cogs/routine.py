@@ -23,6 +23,7 @@ from core.storage import append_audit, load_json, save_json
 
 log = logging.getLogger("nubtk.routine")
 STATE_FILE = DATA_DIR / "routine" / "state.json"
+EVENTS_FILE = DATA_DIR / "events.json"
 
 DAYS = ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 DAY_ALIASES = {d[:3].lower(): d for d in DAYS}
@@ -185,10 +186,10 @@ class Routine(commands.Cog):
         self.sheet_url = cfg.get("sheet_url", "")
         self.sheet_names = cfg.get("sheets", ["CSE", "ECSE"])
         self.titles_sheet = cfg.get("titles_sheet", "Course Offerings")
-        self.titles: dict = {}
         self.teacher = cfg.get("teacher_initial", "") or (self.s.raw.get("instructor", {}) or {}).get("initial", "")
 
         self.state: dict = load_json(STATE_FILE, {})
+        self.titles = (self.state.get("_meta") or {}).get("titles", {}) or {}
         hours = float(cfg.get("auto_check_hours", 6) or 0)
         self.auto = tasks.loop(hours=hours)(self._auto) if hours > 0 else None
         brief = str(cfg.get("daily_brief_time", "07:30") or "")
@@ -197,14 +198,18 @@ class Routine(commands.Cog):
             from datetime import time as dtime
             h, m = (int(x) for x in brief.split(":"))
             self.brief = tasks.loop(time=dtime(hour=h, minute=m, tzinfo=self.s.tz))(self._daily_brief)
+        from datetime import time as _t
+        self.midnight = tasks.loop(time=_t(hour=0, minute=1, tzinfo=self.s.tz))(self._midnight)
 
     async def cog_load(self):
         if self.auto:
             self.auto.start()
         if self.brief:
             self.brief.start()
+        self.midnight.start()
 
     async def cog_unload(self):
+        self.midnight.cancel()
         if self.auto:
             self.auto.cancel()
         if self.brief:
@@ -213,7 +218,11 @@ class Routine(commands.Cog):
     async def _auto(self):
         await self.bot.wait_until_ready()
         try:
-            report, changed = await self.check(post_summary=False)
+            repost = self._meta().get("view_v") != self.VIEW_VERSION
+            report, changed = await self.check(force_repost=repost, post_summary=False)
+            if repost:
+                self._meta()["view_v"] = self.VIEW_VERSION
+                save_json(STATE_FILE, self.state)
         except Exception as e:  # noqa: BLE001
             log.warning("Auto routine check failed: %s", e)
             return
@@ -246,6 +255,7 @@ class Routine(commands.Cog):
                 sheets[name] = [list(r) for r in wb[name].iter_rows(values_only=True)]
         if self.titles_sheet in wb.sheetnames:
             self.titles = parse_titles([list(r) for r in wb[self.titles_sheet].iter_rows(values_only=True)])
+            self.state.setdefault("_meta", {})["titles"] = self.titles
         if not sheets:
             raise commands.BadArgument(f"Sheets {self.sheet_names} not found. Available: {', '.join(wb.sheetnames)}")
         return sheets
@@ -303,16 +313,168 @@ class Routine(commands.Cog):
         e.set_footer(text="Source: official department routine · this pinned message is always the latest")
         return e
 
+    VIEW_VERSION = 3  # bump when the buttons under the pinned routine change → auto re-post
+
     def _link_view(self):
-        """Under the pinned routine: 🔄 Update routine (teacher only) + 📄 open the sheet."""
+        """Under the pinned routine: students' 📅 buttons, 🔄 Update (teacher), 📄 sheet link."""
         v = discord.ui.View(timeout=None)
+        v.add_item(discord.ui.Button(label="My section today (classes & deadlines)", emoji="📅", style=discord.ButtonStyle.primary,
+                                     custom_id="nubtk:rt:today", row=0))
+        v.add_item(discord.ui.Button(label="Tomorrow", emoji="📆", style=discord.ButtonStyle.secondary,
+                                     custom_id="nubtk:rt:tomorrow", row=0))
         v.add_item(discord.ui.Button(label="Update routine (teacher)", emoji="🔄", style=discord.ButtonStyle.success,
-                                     custom_id="nubtk:panel:routine_check"))
+                                     custom_id="nubtk:panel:routine_check", row=1))
         if self.sheet_url:
             v.add_item(discord.ui.Button(label="Open full routine sheet", emoji="📄", style=discord.ButtonStyle.link,
-                                         url=self.sheet_url))
-        v.stop()  # handled by the panel's persistent button
+                                         url=self.sheet_url, row=1))
+        v.stop()  # buttons are handled by on_interaction / the panel (work after restarts)
         return v
+
+    # ------------------------------------------------------------ deadlines & tests (assignment, CT, quiz …)
+    EVENT_TYPES = {"assignment": ("Assignment", "📝"), "ct": ("CT / Class test", "✍️"), "quiz": ("Quiz", "❓"),
+                   "lab": ("Lab report", "🧪"), "presentation": ("Presentation", "🎤"), "exam": ("Exam", "📚"),
+                   "other": ("Other", "📌")}
+
+    def _events(self) -> dict:
+        if not hasattr(self, "_ev"):
+            self._ev = load_json(EVENTS_FILE, {})
+        return self._ev
+
+    def save_events(self):
+        save_json(EVENTS_FILE, self._events())
+
+    def add_event(self, kind, title, sections, when, details, by) -> str:
+        import secrets
+        eid = secrets.token_hex(3)
+        self._events()[eid] = {"kind": kind, "title": title, "sections": sections, "when": when.isoformat(timespec="minutes"),
+                               "details": details, "by": by, "created": self.s.now_str()}
+        self.save_events()
+        return eid
+
+    def events_between(self, sec, start, end) -> list:
+        """Events for a section (or all sections if sec is None) with start <= when < end."""
+        from datetime import datetime as _dt
+        out = []
+        for eid, ev in self._events().items():
+            w = _dt.fromisoformat(ev["when"])
+            if not (start <= w < end):
+                continue
+            if sec and sec not in ev["sections"] and "all" not in ev["sections"]:
+                continue
+            out.append((w, eid, ev))
+        out.sort(key=lambda x: x[0])
+        return out
+
+    def event_line(self, w, ev, show_sections=False) -> str:
+        name, icon = self.EVENT_TYPES.get(ev["kind"], ("Other", "📌"))
+        secs = f" · {', '.join(ev['sections'])}" if show_sections else ""
+        det = f"\n   _{ev['details'][:120]}_" if ev.get("details") else ""
+        return f"{icon} **{name}: {ev['title']}** — {w:%a %d %b, %I:%M %p}{secs}{det}"
+
+    def _day_bounds(self, offset=0):
+        from datetime import timedelta
+        start = (self.s.now() + timedelta(days=offset)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return start, start + timedelta(days=1)
+
+    def add_event_fields(self, e: discord.Embed, sec, offset=0, show_sections=False):
+        from datetime import timedelta
+        start, end = self._day_bounds(offset)
+        today = self.events_between(sec, start, end)
+        soon = self.events_between(sec, end, end + timedelta(days=7))
+        if today:
+            e.add_field(name="📌 Deadlines & tests on this day", inline=False,
+                        value="\n".join(self.event_line(w, ev, show_sections) for w, _, ev in today)[:1024])
+        if soon:
+            e.add_field(name="⏳ Coming up (next 7 days)", inline=False,
+                        value="\n".join(self.event_line(w, ev, show_sections) for w, _, ev in soon)[:1024])
+
+    def prune_events(self):
+        """Forget events older than 2 days."""
+        from datetime import datetime as _dt, timedelta
+        cutoff = self.s.now() - timedelta(days=2)
+        ev = self._events()
+        old = [k for k, v in ev.items() if _dt.fromisoformat(v["when"]) < cutoff]
+        for k in old:
+            ev.pop(k, None)
+        if old:
+            self.save_events()
+
+    async def announce_event(self, eid):
+        ev = self._events()[eid]
+        from datetime import datetime as _dt
+        w = _dt.fromisoformat(ev["when"])
+        name, icon = self.EVENT_TYPES.get(ev["kind"], ("Other", "📌"))
+        secs = list(self.s.sections) if "all" in ev["sections"] else ev["sections"]
+        posted = []
+        for sec in secs:
+            ch = self.bot.channel_for(f"sec:{sec}:announcement")
+            role = self.bot.role_for(f"role:sec:{sec}")
+            if not ch:
+                continue
+            emb = discord.Embed(title=f"{icon} {name}: {ev['title']}", color=discord.Color.orange(),
+                                description=(f"🗓️ **{w:%A, %d %B %Y}**\n⏰ **{w:%I:%M %p}**"
+                                             + (f"\n\n{ev['details']}" if ev.get("details") else "")))
+            emb.set_footer(text=f"{self.s.teacher} · Section {sec} · also shown under 📅 in 🗓️┃routine")
+            try:
+                await ch.send(content=role.mention if role else None, embed=emb)
+                posted.append(sec)
+            except discord.HTTPException:
+                pass
+        return posted
+
+    # ------------------------------------------------------------ students: "my section's classes today"
+    def _date_label(self, offset: int = 0) -> tuple:
+        from datetime import timedelta
+        d = self.s.now() + timedelta(days=offset)
+        return d.strftime("%A"), d.strftime("%A, %d %B %Y")
+
+    def section_day_embed(self, sec: str, offset: int = 0) -> discord.Embed:
+        day, pretty = self._date_label(offset)
+        items = [e for e in (self.state.get(sec) or {}).get("entries", []) if e["day"] == day]
+        items.sort(key=lambda e: _time_key(e["time"]))
+        t = (self.teacher or "").upper()
+        word = "Today" if offset == 0 else "Tomorrow"
+        e = discord.Embed(title=f"📅 Section {sec} — {word}",
+                          description=f"🗓️ **{pretty}**\n", color=discord.Color(self.s.section_color(sec)))
+        if not items:
+            e.description += "\n🎉 No classes."
+        else:
+            e.description += "\n**🏫 Classes**"
+            lines = []
+            for it in items:
+                title = self.titles.get(it["course"]) or next(
+                    (i["title"] for i in self.s.courses.values() if i["code"].upper() == it["course"]), "")
+                star = "⭐ " if it["teacher"] == t else ""
+                lines.append(f"{star}🕘 **{it['time']}**\n   **{it['course']}** {title[:45]} · 🏫 Room **{it['room']}** · 👨‍🏫 {it['teacher']}")
+            e.description += "\n" + "\n".join(lines)
+        self.add_event_fields(e, sec, offset)
+        e.set_footer(text="Only you can see this · from the official routine")
+        return e
+
+    def _section_of_channel(self, channel_id: int):
+        for sec in self.s.sections:
+            ch = self.bot.channel_for(f"sec:{sec}:routine")
+            if ch and ch.id == channel_id:
+                return sec
+        return None
+
+    def _section_of_member(self, member):
+        rec = self.bot.store.get(member.id)
+        return rec.get("section") if rec else None
+
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction):
+        if interaction.type != discord.InteractionType.component:
+            return
+        cid = (interaction.data or {}).get("custom_id", "")
+        if not cid.startswith("nubtk:rt:"):
+            return
+        sec = self._section_of_channel(interaction.channel_id) or self._section_of_member(interaction.user)
+        if not sec:
+            await interaction.response.send_message("I couldn't find your section.", ephemeral=True)
+            return
+        offset = 1 if cid.endswith("tomorrow") else 0
+        await interaction.response.send_message(embed=self.section_day_embed(sec, offset), ephemeral=True)
 
     async def _replace_pinned(self, sec, embeds) -> int | None:
         ch = self.bot.channel_for(f"sec:{sec}:routine")
@@ -394,9 +556,14 @@ class Routine(commands.Cog):
     def day_embed(self, day: str, label: str) -> discord.Embed:
         items = self.my_classes(day)
         ours = {info["code"].upper(): info for info in self.s.courses.values()}
-        e = discord.Embed(title=f"📅 {label} — {day}", color=discord.Color.gold(), timestamp=self.s.now())
+        from datetime import timedelta
+        offset = next((i for i in range(7) if (self.s.now() + timedelta(days=i)).strftime("%A") == day), 0)
+        pretty = (self.s.now() + timedelta(days=offset)).strftime("%A, %d %B %Y")
+        e = discord.Embed(title=f"📅 {label} — classes, deadlines & tests", description=f"🗓️ **{pretty}**\n",
+                          color=discord.Color.gold(), timestamp=self.s.now())
         if not items:
-            e.description = "🎉 No classes."
+            e.description += "\n🎉 No classes."
+            self.add_event_fields(e, None, offset, show_sections=True)
             return e
         lines = []
         for it in items:
@@ -405,7 +572,8 @@ class Routine(commands.Cog):
             eve = " (Evening)" if self.s.is_evening(it["section"]) else ""
             lines.append(f"🕘 **{it['time']}**\n"
                          f"   **{it['course']}** {info.get('short', '')}{lab} · Section **{it['section']}**{eve} · 🏫 Room **{it['room']}**")
-        e.description = "\n".join(lines)[:4000]
+        e.description = (e.description + "\n" + "\n".join(lines))[:4000]
+        self.add_event_fields(e, None, offset, show_sections=True)
         e.set_footer(text=f"{len(items)} class(es) · from the official routine")
         return e
 
@@ -433,18 +601,53 @@ class Routine(commands.Cog):
         d = self.s.now() + timedelta(days=offset)
         return d.strftime("%A")
 
+    def _meta(self) -> dict:
+        return self.state.setdefault("_meta", {})
+
+    async def _delete_old_brief(self):
+        mid = self._meta().pop("brief_msg", None)
+        ch = self.bot.channel_for("admin_channel")
+        if mid and ch:
+            try:
+                await (await ch.fetch_message(int(mid))).delete()
+            except discord.HTTPException:
+                pass
+        save_json(STATE_FILE, self.state)
+
+    async def _midnight(self):
+        await self.bot.wait_until_ready()
+        await self._delete_old_brief()
+
     async def _daily_brief(self):
         await self.bot.wait_until_ready()
+        await self._delete_old_brief()  # yesterday's message disappears
         ch = self.bot.channel_for("admin_channel")
         if not ch or not self.state:
             return
         day = self._today()
-        if not self.my_classes(day):
-            return  # no message on days without classes
+        self.prune_events()
+        start, end = self._day_bounds(0)
+        if not self.my_classes(day) and not self.events_between(None, start, end):
+            return  # nothing today → no message
         try:
-            await ch.send(content="☀️ Good morning! Your classes today:", embed=self.day_embed(day, "Today"))
+            msg = await ch.send(content="☀️ Good morning! Your classes today (this message is removed tomorrow):",
+                                embed=self.day_embed(day, "Today"))
+            self._meta()["brief_msg"] = msg.id
+            save_json(STATE_FILE, self.state)
         except discord.HTTPException:
             pass
+
+    @commands.command(name="deadlines")
+    async def deadlines_cmd(self, ctx):
+        from datetime import timedelta
+        now = self.s.now()
+        items = self.events_between(None, now - timedelta(hours=1), now + timedelta(days=60))
+        if not items:
+            await ctx.send("No upcoming deadlines or tests. Add one with 📌 Add deadline / test in the panel.")
+            return
+        await ctx.send(embed=discord.Embed(title="📌 Upcoming deadlines & tests", color=discord.Color.orange(),
+                                           description="\n".join(f"`{eid}` " + self.event_line(w, ev, True)
+                                                                  for w, eid, ev in items)[:4000]))
 
     @commands.command(name="today")
     async def today_cmd(self, ctx):

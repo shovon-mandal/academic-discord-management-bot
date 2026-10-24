@@ -93,6 +93,11 @@ A control panel is posted in `🛠️┃admin`: **one message per row**, each li
 - **📅 My classes today** (panel) or `!today` / `!tomorrow` / `!week`: which section, course, time and room — straight from the routine.
 - Every morning at **07:30** (`routine.daily_brief_time`) the bot posts today's classes in `🛠️┃admin` (nothing on days off).
 
+### 📌 Deadlines & tests + "My section today" for students
+- Panel → **📌 Add deadline / test**: choose type (Assignment, CT, Quiz, Lab report, Presentation, Exam), section(s), title, date & time. It is announced in the section(s) and saved.
+- Under every pinned routine students have **📅 My section today (classes & deadlines)** and **📆 Tomorrow**. Only the student who clicks sees the answer (with the date): that day's classes, deadlines/tests on that day, and what's coming in the next 7 days. No daily notifications for students.
+- Your morning brief (07:30) shows the date, your classes and deadlines/tests, and is **deleted automatically the next day**.
+
 ### ⏰ Reminders for any message
 Re-announce an existing message (assignment deadline, CT notice…) now or later:
 - **Right-click the message → Apps → ⏰ Set reminder**, or click **⏰ Remind a message** in the panel and paste the message link.
