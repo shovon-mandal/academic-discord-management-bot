@@ -69,7 +69,7 @@ A control panel is posted in `🛠️┃admin`: **one message per row**, each li
 | 🎓 Students | Student list · Excel · Find · Pending · Remind unverified |
 | 👤 Members | Verify · Move section · Rename · Unverify · Kick unverified |
 | ⚙️ System | Re-post welcome · Backup · Status · Update · Restart |
-| 🗓️ Routine & reminders | Check routine · Show routine · Remind a message |
+| 🗓️ Routine & reminders | Update routine · Show routine · Remind a message |
 | 📖 Help | All commands · Show panel here |
 
 `!setup_server` and `!reset_server` are **text only**. Both show a warning with **Yes / Cancel** buttons before doing anything.
@@ -82,9 +82,11 @@ A control panel is posted in `🛠️┃admin`: **one message per row**, each li
 - Optional: set `attendance_min_percent` (e.g. `50`) so a student must stay at least that % of the class to count as present.
 
 ### 🗓️ Routine from the department Google Sheet
-- `config.json → routine.sheet_url` points to the official routine sheet. The bot reads its grid tabs (`CSE`, `ECSE`) and finds every class of the teacher (`teacher_initial`) for each section.
-- Each section has a read-only **🗓️┃routine** channel with **one pinned message that is always the latest routine** (day, time, course, room).
-- Click **🔄 Check routine** (or `!routine_check`). The bot also checks automatically every 6 hours. If anything changed, it replaces the pinned routine and posts what changed (➕ new / ➖ removed) with a ping.
+- `config.json → routine.sheet_url` points to the official routine sheet. The bot reads its grid tabs (`CSE`, `ECSE`) and course titles from `Course Offerings`.
+- Each section has a read-only **🗓️┃routine** channel with **one pinned message that is always the latest routine**, in two parts:
+  - **📚 Full class routine** of the section (all courses and teachers, ⭐ marks your classes)
+  - **👨‍🏫 Classes with SM** (only your classes: day, time, course, room)
+- Click **🔄 Update routine** — in the panel or right under the pinned routine (or `!routine_check`). The bot also checks automatically every 6 hours. If anything changed, it replaces the pinned routine and posts what changed (➕ new / ➖ removed) with a ping.
 - The sheet must be shared as **Anyone with the link → Viewer**.
 
 ### ⏰ Reminders for any message

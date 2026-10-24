@@ -12,6 +12,7 @@ import discord
 from discord.ext import commands, tasks
 
 from core.config import BASE_DIR, DATA_DIR, LOG_DIR, Settings
+from core.storage import load_json, save_json
 from core.system import (cpu_temp_c, disk_str, git_commit, host_uptime_str, human_duration, make_backup,
                          memory_mb, platform_str, run_cmd)
 
@@ -50,7 +51,37 @@ class Maintenance(commands.Cog):
         await self.bot.send_log("💾 Daily backup", f"`{path.name}` ({path.stat().st_size // 1024} KB)",
                                 discord.Color.dark_teal(), file=file)
 
-    async def _restart(self, reason: str):
+    async def _restart(self, reason: str, msg: discord.Message | None = None):
+        if msg is not None:  # remember the "Restarting..." message so it can be updated after the restart
+            try:
+                save_json(DATA_DIR / ".restart_msg.json", {"channel": msg.channel.id, "message": msg.id})
+            except OSError:
+                pass
+        await self._restart_now(reason)
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if getattr(self, "_ready_once", False):
+            return
+        self._ready_once = True
+        info = load_json(DATA_DIR / ".restart_msg.json", {})
+        if not info:
+            return
+        try:
+            (DATA_DIR / ".restart_msg.json").unlink()
+        except OSError:
+            pass
+        ch = self.bot.get_channel(int(info.get("channel", 0)))
+        if ch is None:
+            return
+        try:
+            msg = await ch.fetch_message(int(info["message"]))
+            text = (msg.content or "").replace("♻️ Restarting... (back in ~15 s)", "").replace("♻️ Restarting...", "")
+            await msg.edit(content=(text.rstrip() + f"\n✅ **Restarted — bot is back online.** Version: `{git_commit()}`")[:1990])
+        except (discord.HTTPException, KeyError, ValueError):
+            pass
+
+    async def _restart_now(self, reason: str):
         await self.bot.send_log("♻️ Restarting", reason, discord.Color.orange())
         self.bot.restart_requested = True
         await self.bot.close()
@@ -98,8 +129,8 @@ class Maintenance(commands.Cog):
 
     @commands.command(name="restart")
     async def restart(self, ctx):
-        await ctx.send("♻️ Restarting... (back in ~15 s)")
-        await self._restart(f"Requested by {ctx.author.mention}")
+        msg = await ctx.send("♻️ Restarting... (back in ~15 s)")
+        await self._restart(f"Requested by {ctx.author.mention}", msg)
 
     # ------------------------------------------------------------ update (manual + automatic)
     async def _do_update(self, report, who: str) -> None:
@@ -135,9 +166,9 @@ class Maintenance(commands.Cog):
             (DATA_DIR / ".repost_welcome").write_text("1")
             notes.append("config.json changed → welcome messages will be re-posted automatically. "
                          "If you changed channels/sections, run `!setup_server`.")
-        await report(f"✅ Updated:\n```{out[-1200:]}```\nChanged: `{' '.join(changed.split())[:500]}`\n"
-                     + "\n".join(notes) + "\n♻️ Restarting...")
-        await self._restart(f"Update by {who}: {git_commit()}")
+        last = await report(f"✅ Updated:\n```{out[-1200:]}```\nChanged: `{' '.join(changed.split())[:500]}`\n"
+                            + "\n".join(notes) + "\n♻️ Restarting...")
+        await self._restart(f"Update by {who}: {git_commit()}", last)
 
     @commands.command(name="update")
     async def update(self, ctx):
@@ -145,6 +176,7 @@ class Maintenance(commands.Cog):
 
         async def report(text):
             await msg.edit(content=text[:1990])
+            return msg
         await self._do_update(report, ctx.author.mention)
 
     async def _auto_update(self):
@@ -160,7 +192,7 @@ class Maintenance(commands.Cog):
         log.info("Auto-update: %s new commit(s) on GitHub", count.strip())
 
         async def report(text):
-            await self.bot.send_log("🔄 Auto-update", text[:3900], discord.Color.blurple())
+            return await self.bot.send_log("🔄 Auto-update", text[:3900], discord.Color.blurple())
         await self._do_update(report, "auto-update")
 
 

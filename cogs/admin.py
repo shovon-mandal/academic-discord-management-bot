@@ -50,8 +50,8 @@ HELP = [
         ("scheduled", "List / cancel scheduled announcements", "!scheduled"),
     ]),
     ("🗓️ Routine & reminders", [
-        ("routine_check", "Read the routine sheet, update pinned routines, announce changes", "!routine_check"),
-        ("routine [sec]", "Show the saved routine", "!routine 2C"),
+        ("routine_check", "Update routine: check the online sheet, update pinned routines, announce changes", "!routine_check"),
+        ("routine [sec] [all|mine]", "Show saved routine: full section / only my classes", "!routine 2C  ·  !routine 2C mine"),
         ("routine_repost", "Re-post every section's pinned routine", "!routine_repost"),
         ("(right-click a message → Apps → ⏰ Set reminder)", "Re-announce a message now or later", "deadline / CT reminder"),
     ]),

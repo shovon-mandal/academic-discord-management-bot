@@ -132,6 +132,22 @@ def find_effective_date(rows: list) -> str:
     return ""
 
 
+CODE_RE = re.compile(r"^[A-Z]{2,5} ?\d{4}$")
+
+
+def parse_titles(rows: list) -> dict:
+    """'CSE 1205' → 'Digital Logic Design' from the Course Offerings sheet."""
+    out = {}
+    for raw in rows:
+        row = [_cell(raw, i) for i in range(len(raw))]
+        for i, c in enumerate(row[:-1]):
+            cu = re.sub(r"\s+", " ", c.upper())
+            nxt = row[i + 1]
+            if CODE_RE.match(cu) and nxt and not CODE_RE.match(nxt.upper()) and len(nxt) > 3:
+                out.setdefault(cu if " " in cu else re.sub(r"([A-Z]+)(\d+)", r"\1 \2", cu), nxt)
+    return out
+
+
 def section_routines(entries: list, settings, teacher: str, scope: str) -> dict:
     """section → sorted unique list of entries for that section."""
     codes = {info["code"].upper(): key for key, info in settings.courses.items()}
@@ -168,8 +184,10 @@ class Routine(commands.Cog):
         cfg = self.s.raw.get("routine", {}) or {}
         self.sheet_url = cfg.get("sheet_url", "")
         self.sheet_names = cfg.get("sheets", ["CSE", "ECSE"])
+        self.titles_sheet = cfg.get("titles_sheet", "Course Offerings")
+        self.titles: dict = {}
         self.teacher = cfg.get("teacher_initial", "") or (self.s.raw.get("instructor", {}) or {}).get("initial", "")
-        self.scope = cfg.get("scope", "my_courses")
+
         self.state: dict = load_json(STATE_FILE, {})
         hours = float(cfg.get("auto_check_hours", 6) or 0)
         self.auto = tasks.loop(hours=hours)(self._auto) if hours > 0 else None
@@ -216,55 +234,77 @@ class Routine(commands.Cog):
         for name in self.sheet_names:
             if name in wb.sheetnames:
                 sheets[name] = [list(r) for r in wb[name].iter_rows(values_only=True)]
+        if self.titles_sheet in wb.sheetnames:
+            self.titles = parse_titles([list(r) for r in wb[self.titles_sheet].iter_rows(values_only=True)])
         if not sheets:
             raise commands.BadArgument(f"Sheets {self.sheet_names} not found. Available: {', '.join(wb.sheetnames)}")
         return sheets
 
     async def build(self):
+        """→ ({section: [all classes of the section]}, effective_date)"""
         sheets = await self.fetch_rows()
         entries, effective = [], ""
         for name, rows in sheets.items():
             entries += parse_grid(rows, name)
             effective = effective or find_effective_date(rows)
-        return section_routines(entries, self.s, self.teacher, self.scope), effective
+        return section_routines(entries, self.s, "", "all"), effective
+
+    def mine(self, items: list) -> list:
+        codes = {info["code"].upper() for info in self.s.courses.values()}
+        t = (self.teacher or "").upper()
+        return [e for e in items if (not t or e["teacher"] == t) and e["course"] in codes]
 
     # ------------------------------------------------------------ messages
-    def routine_embed(self, sec, items, effective) -> discord.Embed:
+    def routine_embed(self, sec, items, effective, kind="all") -> discord.Embed:
+        """kind = 'all' (full section routine) or 'mine' (only my classes)."""
         s = self.s
-        e = discord.Embed(
-            title=f"🗓️ Class Routine — Section {sec}" + (" (Evening)" if s.is_evening(sec) else ""),
-            description=(f"Effective from **{effective or '—'}** · checked {s.now():%d %b %Y, %I:%M %p}\n"
-                         + ("Classes are **offline** (on campus) unless an online class is announced.\n"
-                            if items else "")),
-            color=discord.Color(s.section_color(sec)))
+        eve = " (Evening)" if s.is_evening(sec) else ""
+        if kind == "all":
+            title = f"📚 Full class routine — Section {sec}{eve}"
+            color = discord.Color(s.section_color(sec))
+            intro = f"All courses of Section {sec} · ⭐ = {self.teacher or 'my'} classes\n"
+        else:
+            title = f"👨‍🏫 Section {sec} — classes with {self.teacher or 'me'}"
+            color = discord.Color.gold()
+            intro = "Classes are **offline** (on campus) unless an online class is announced.\n"
+        e = discord.Embed(title=title, color=color,
+                          description=f"Effective from **{effective or '—'}** · checked {s.now():%d %b %Y, %I:%M %p}\n" + intro)
+        ours = {info["code"].upper(): info for info in s.courses.values()}
         by_day: dict = {}
         for it in items:
             by_day.setdefault(it["day"], []).append(it)
-        titles = {info["code"].upper(): info for info in s.courses.values()}
+        t = (self.teacher or "").upper()
         for day in DAYS:
             if day not in by_day:
                 continue
             lines = []
             for it in by_day[day]:
-                info = titles.get(it["course"], {})
-                name = info.get("short") or info.get("title") or ""
-                lab = " 🧪" if info.get("type") == "lab" else ""
-                lines.append(f"`{it['time']}` · **{it['course']}** {name}{lab}\n   🏫 Room **{it['room']}** · 👨‍🏫 {it['teacher']}")
+                info = ours.get(it["course"], {})
+                name = info.get("short") if kind == "mine" and info else (self.titles.get(it["course"]) or info.get("title") or "")
+                lab = " 🧪" if "LAB" in (it["room"] or "").upper() or info.get("type") == "lab" else ""
+                star = "⭐ " if kind == "all" and it["teacher"] == t else ""
+                if kind == "all":
+                    lines.append(f"{star}`{it['time']}` **{it['course']}** {name[:38]}{lab} · 🏫 {it['room']} · {it['teacher']}")
+                else:
+                    lines.append(f"`{it['time']}` · **{it['course']}** {name}{lab}\n   🏫 Room **{it['room']}**")
             e.add_field(name=f"📅 {day}", value="\n".join(lines)[:1024], inline=False)
         if not items:
-            e.add_field(name="No classes found", value="This section has no classes in the current routine.", inline=False)
-        e.set_footer(text="Source: official department routine · this message is always the latest version")
+            e.add_field(name="No classes found", value="Nothing in the current routine.", inline=False)
+        e.set_footer(text="Source: official department routine · this pinned message is always the latest")
         return e
 
     def _link_view(self):
-        if not self.sheet_url:
-            return None
+        """Under the pinned routine: 🔄 Update routine (teacher only) + 📄 open the sheet."""
         v = discord.ui.View(timeout=None)
-        v.add_item(discord.ui.Button(label="Open full routine sheet", emoji="📄", style=discord.ButtonStyle.link,
-                                     url=self.sheet_url))
+        v.add_item(discord.ui.Button(label="Update routine (teacher)", emoji="🔄", style=discord.ButtonStyle.success,
+                                     custom_id="nubtk:panel:routine_check"))
+        if self.sheet_url:
+            v.add_item(discord.ui.Button(label="Open full routine sheet", emoji="📄", style=discord.ButtonStyle.link,
+                                         url=self.sheet_url))
+        v.stop()  # handled by the panel's persistent button
         return v
 
-    async def _replace_pinned(self, sec, embed) -> int | None:
+    async def _replace_pinned(self, sec, embeds) -> int | None:
         ch = self.bot.channel_for(f"sec:{sec}:routine")
         if ch is None:
             return None
@@ -274,10 +314,7 @@ class Routine(commands.Cog):
                 await (await ch.fetch_message(int(old))).delete()
             except discord.HTTPException:
                 pass
-        kw = {"embed": embed}
-        v = self._link_view()
-        if v:
-            kw["view"] = v
+        kw = {"embeds": embeds, "view": self._link_view()}
         msg = await ch.send(**kw)
         try:
             await msg.pin()
@@ -306,14 +343,17 @@ class Routine(commands.Cog):
                 lines.append(f"• **{sec}** — ⚠️ no routine channel (run `!setup_server`)")
                 continue
             if first_time or changed or eff_changed or force_repost or not prev.get("msg_id"):
-                mid = await self._replace_pinned(sec, self.routine_embed(sec, items, effective))
+                mid = await self._replace_pinned(sec, [self.routine_embed(sec, items, effective, "all"),
+                                                       self.routine_embed(sec, self.mine(items), effective, "mine")])
                 prev = {"entries": items, "effective": effective, "msg_id": mid}
                 self.state[sec] = prev
             if changed:
                 any_changed = True
                 role = self.bot.role_for(f"role:sec:{sec}")
                 text = [f"{role.mention if role else ''} 🔔 **Class routine updated** (effective from {effective}):"]
-                text += [f"➕ {x}" for x in added] + [f"➖ ~~{x}~~" for x in removed]
+                t = (self.teacher or "").upper()
+                star = lambda x: "⭐ " if t and x.endswith(f"· {t}") else ""  # noqa: E731
+                text += [f"➕ {star(x)}{x}" for x in added] + [f"➖ {star(x)}~~{x}~~" for x in removed]
                 text.append("📌 The pinned message above is the latest routine.")
                 try:
                     await ch.send("\n".join(text)[:1990])
@@ -322,9 +362,9 @@ class Routine(commands.Cog):
                 append_audit(self.s, "routine_changed", section=sec, added=added, removed=removed)
                 lines.append(f"• **{sec}** — 🔔 **updated** (+{len(added)} / −{len(removed)}) → {ch.mention}")
             elif first_time:
-                lines.append(f"• **{sec}** — 📌 routine posted ({len(items)} classes) → {ch.mention}")
+                lines.append(f"• **{sec}** — 📌 routine posted ({len(items)} classes, {len(self.mine(items))} yours) → {ch.mention}")
             else:
-                lines.append(f"• **{sec}** — ✅ no change ({len(items)} classes)")
+                lines.append(f"• **{sec}** — ✅ no change ({len(items)} classes, {len(self.mine(items))} yours)")
         save_json(STATE_FILE, self.state)
         report = f"🗓️ **Routine check** · effective from **{effective or '—'}**\n" + "\n".join(lines)
         return report, any_changed
@@ -343,20 +383,29 @@ class Routine(commands.Cog):
         await msg.edit(content=report[:1990])
 
     @commands.command(name="routine")
-    async def routine_show(self, ctx, section: str = ""):
+    async def routine_show(self, ctx, section: str = "", which: str = "both"):
+        """!routine · !routine 2C · !routine 2C all · !routine 2C mine"""
         sec = self.s.normalize_section(section) if section else None
-        secs = [sec] if sec else list(self.s.sections)
         if section and not sec:
-            raise commands.BadArgument(f"Unknown section. Valid: {', '.join(self.s.sections)}")
+            if section.lower() in ("all", "mine", "both"):
+                which, sec = section.lower(), None
+            else:
+                raise commands.BadArgument(f"Unknown section. Valid: {', '.join(self.s.sections)}")
+        secs = [sec] if sec else list(self.s.sections)
         embeds = []
         for x in secs:
             st = self.state.get(x)
-            if st:
-                embeds.append(self.routine_embed(x, st.get("entries", []), st.get("effective", "")))
+            if not st:
+                continue
+            items = st.get("entries", [])
+            if which in ("both", "all"):
+                embeds.append(self.routine_embed(x, items, st.get("effective", ""), "all"))
+            if which in ("both", "mine"):
+                embeds.append(self.routine_embed(x, self.mine(items), st.get("effective", ""), "mine"))
         if not embeds:
             raise commands.BadArgument("No routine saved yet — run `!routine_check` first.")
-        for i in range(0, len(embeds), 10):
-            await ctx.send(embeds=embeds[i:i + 10])
+        for i in range(0, len(embeds), 4):
+            await ctx.send(embeds=embeds[i:i + 4])
 
 
 async def setup(bot):

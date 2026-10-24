@@ -55,6 +55,13 @@ class ServerSetup(commands.Cog):
         ver = self.bot.get_cog("Verification")
         if ver:
             await ver.post_welcome_messages(ctx.guild)
+        routine = self.bot.get_cog("Routine")
+        if routine:  # fill the 🗓️┃routine channels right away
+            try:
+                report, _ = await routine.check()
+                await ctx.send(report[:1990])
+            except Exception as e:  # noqa: BLE001
+                await ctx.send(f"⚠️ Routine not loaded yet: {e}")
         admin_ch = self.bot.channel_for("admin_channel")
         if admin_ch and admin_ch.id != ctx.channel.id:
             await ctx.send(f"➡️ From now on, use all admin commands here: {admin_ch.mention}")

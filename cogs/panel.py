@@ -616,7 +616,7 @@ PANEL_GROUPS = [
         ("restart", "Restart", "♻️", B.danger, "Restart the bot (~15 s)."),
     ]),
     ("Row 6 · 🗓️ Routine & reminders", discord.Color.purple(), [
-        ("routine_check", "Check routine", "🔄", B.success, "Read the department routine sheet → update each section's pinned 🗓️┃routine and announce changes."),
+        ("routine_check", "Update routine", "🔄", B.success, "Checks the online routine sheet now → updates every section's pinned 🗓️┃routine and posts what changed."),
         ("routine_show", "Show routine", "🗓️", B.secondary, "Show the saved routine of every section here."),
         ("reminder", "Remind a message", "⏰", B.primary, "Paste a message link → re-announce it now or later (deadline, CT…). Tip: right-click a message → Apps → ⏰ Set reminder."),
     ]),
@@ -782,8 +782,10 @@ class Panel(commands.Cog):
             await interaction.response.defer(ephemeral=True, thinking=True)
             try:
                 report, _ = await self.bot.get_cog("Routine").check()
-                await interaction.channel.send(report[:1990])
-                await interaction.followup.send("✅ Routine checked.", ephemeral=True)
+                adm = self.bot.channel_for("admin_channel")
+                if adm:
+                    await adm.send(report[:1990])
+                await interaction.followup.send(report[:1990], ephemeral=True)
             except commands.BadArgument as e:
                 await interaction.followup.send(f"⚠️ {e}", ephemeral=True)
             except Exception as e:  # noqa: BLE001

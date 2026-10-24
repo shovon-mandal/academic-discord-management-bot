@@ -32,7 +32,6 @@
     "sheet_url": "https://docs.google.com/spreadsheets/d/1NUCjsCxb4nLH9ORbacA_R4FycFohhBCksa6PTD9I8PA/edit?gid=1884702484#gid=1884702484",
     "sheets": ["CSE", "ECSE"],
     "teacher_initial": "SM",
-    "scope": "my_courses",
     "auto_check_hours": 6
   },
 
