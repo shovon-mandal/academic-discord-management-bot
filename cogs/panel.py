@@ -592,17 +592,57 @@ class Panel(commands.Cog):
         self.scheduler.cancel()
 
     # ------------------------------------------------------------ panel message
+    PANEL_GUIDE = [
+        ("📢 Row 1 · Communication", [
+            ("📢 Announce", "Pick section/course → write title + message → posts in their announcement channel. "
+                           "Fill *Schedule* to post later."),
+            ("✉️ DM students", "Pick section/course → write message → every student gets a private DM."),
+            ("🗓️ Scheduled posts", "See / cancel announcements waiting to be posted."),
+            ("🔗 Invite link", "Server invite link + ready message for Facebook / WhatsApp."),
+            ("📎 Marks / roster", "Shows how to send marks by DM or upload the official list (needs a file)."),
+        ]),
+        ("🗓️ Row 2 · Attendance", [
+            ("▶️ Start", "Section → course → auto-stop time → Start. Students join the section voice channel."),
+            ("⏹️ Stop", "Stops attendance → Excel with present/absent and minutes in class."),
+            ("⏱️ Running now", "Which attendance is running and how many joined."),
+            ("📈 Report", "Section → course → semester Excel with every class and %."),
+            ("📊 Stats", "How many students in each section and course."),
+        ]),
+        ("🎓 Row 3 · Students", [
+            ("📋 Student list", "Section → list of all verified students."),
+            ("📗 Excel", "Download the student list as Excel (all, a section or a course)."),
+            ("🔎 Find", "Search by Student ID, name or Discord name."),
+            ("🟡 Pending", "Requests waiting for approval (e.g. same ID used twice) with Approve / Reject."),
+            ("🔔 Remind unverified", "DM + mention everyone who has not verified yet."),
+        ]),
+        ("👤 Row 4 · Manage members", [
+            ("✅ Verify", "Pick member + section → type ID and name → verified."),
+            ("🔀 Move section", "Pick member + new section → moved (roles and nickname change)."),
+            ("✏️ Rename", "Pick member → type correct name → nickname fixed."),
+            ("❌ Unverify", "Pick member → access removed, record deleted."),
+            ("🚪 Kick unverified", "Choose days → preview list → kick people who never verified."),
+        ]),
+        ("⚙️ Row 5 · System", [
+            ("📌 Re-post welcome", "Re-post welcome buttons, instructor cards and this panel."),
+            ("💾 Backup", "Zip of all student data and attendance."),
+            ("🖥️ Status", "Is the bot healthy? Uptime, Tinker Board temperature, RAM."),
+            ("🔄 Update", "Get the newest code from GitHub now and restart."),
+            ("♻️ Restart", "Restart the bot (back in ~15 seconds)."),
+        ]),
+    ]
+
     def panel_embed(self) -> discord.Embed:
-        return discord.Embed(
-            title="🎛️ Control panel",
-            description=("Click a button — a private menu opens where you pick section, course, time or student.\n"
-                         "Results are posted here. Only admins can use these buttons.\n\n"
-                         "**Row 1** 📢 Communication · **Row 2** 🗓️ Attendance · **Row 3** 🎓 Students · "
-                         "**Row 4** 👤 Manage members · **Row 5** ⚙️ System\n\n"
-                         f"Text commands still work — type `{self.s.prefix}help` for the list with examples.\n"
-                         f"⚠️ `{self.s.prefix}setup_server` and `{self.s.prefix}reset_server` are text-only and ask "
-                         "for confirmation."),
+        e = discord.Embed(
+            title="🎛️ Control panel — how to use",
+            description=("Click a button below. A **private menu** opens (only you see it): choose from the "
+                         "dropdowns or fill the form. Results are posted in this channel.\n"
+                         f"⚠️ `{self.s.prefix}setup_server` and `{self.s.prefix}reset_server` are typed commands "
+                         "and always ask **Yes / Cancel** first."),
             color=discord.Color.blurple())
+        for title, items in self.PANEL_GUIDE:
+            e.add_field(name=title, value="\n".join(f"**{b}** — {d}" for b, d in items)[:1024], inline=False)
+        e.set_footer(text=f"Type {self.s.prefix}help for text commands with examples")
+        return e
 
     async def post_panel(self, channel: discord.TextChannel):
         """Remove old pinned bot messages, then pin the help list + the panel."""
