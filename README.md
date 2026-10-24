@@ -60,7 +60,7 @@ The CSV files open directly in Excel. The JSON files are for scripts.
 **`!excel`** sends one `.xlsx` file with a Summary sheet and one sheet for each course and section (`!excel 2C` or `!excel CSE1205` for just one).
 
 ### 🎛️ Button control panel
-A control panel with **25 buttons** is pinned in `🛠️┃admin`. Each button opens a private menu where you pick the section, course, time or student from dropdowns and fill a short form, so you don't need to remember any commands.
+A control panel is posted in `🛠️┃admin`: **one message per row**, each listing what its buttons do with the buttons right under it. Every bot message in the admin channel also ends with **🎛️ Panel** and **📖 All commands** buttons. A printable **user guide** is in [`docs/Class_Bot_User_Guide.pdf`](docs/Class_Bot_User_Guide.pdf). Each button opens a private menu where you pick the section, course, time or student from dropdowns and fill a short form, so you don't need to remember any commands.
 
 | Row | Buttons |
 |---|---|
@@ -69,6 +69,7 @@ A control panel with **25 buttons** is pinned in `🛠️┃admin`. Each button 
 | 🎓 Students | Student list · Excel · Find · Pending · Remind unverified |
 | 👤 Members | Verify · Move section · Rename · Unverify · Kick unverified |
 | ⚙️ System | Re-post welcome · Backup · Status · Update · Restart |
+| 📖 Help | All commands · Show panel here |
 
 `!setup_server` and `!reset_server` are **text only**. Both show a warning with **Yes / Cancel** buttons before doing anything.
 

@@ -527,42 +527,53 @@ class KickMenu(BaseMenu):
 
 
 # ====================================================================== the panel
-PANEL_BUTTONS = [
-    # row 0 — communication
-    ("announce", "Announce", "📢", discord.ButtonStyle.primary, 0),
-    ("dm", "DM students", "✉️", discord.ButtonStyle.primary, 0),
-    ("scheduled", "Scheduled posts", "🗓️", discord.ButtonStyle.secondary, 0),
-    ("invite", "Invite link", "🔗", discord.ButtonStyle.secondary, 0),
-    ("files", "Marks / roster upload", "📎", discord.ButtonStyle.secondary, 0),
-    # row 1 — attendance
-    ("att_start", "Start attendance", "▶️", discord.ButtonStyle.success, 1),
-    ("att_stop", "Stop attendance", "⏹️", discord.ButtonStyle.danger, 1),
-    ("att_status", "Running now", "⏱️", discord.ButtonStyle.secondary, 1),
-    ("att_report", "Attendance report", "📈", discord.ButtonStyle.secondary, 1),
-    ("stats", "Stats", "📊", discord.ButtonStyle.secondary, 1),
-    # row 2 — students
-    ("list", "Student list", "📋", discord.ButtonStyle.secondary, 2),
-    ("excel", "Excel", "📗", discord.ButtonStyle.success, 2),
-    ("find", "Find", "🔎", discord.ButtonStyle.secondary, 2),
-    ("pending", "Pending", "🟡", discord.ButtonStyle.secondary, 2),
-    ("notify", "Remind unverified", "🔔", discord.ButtonStyle.secondary, 2),
-    # row 3 — manage members
-    ("verify", "Verify", "✅", discord.ButtonStyle.success, 3),
-    ("move", "Move section", "🔀", discord.ButtonStyle.primary, 3),
-    ("rename", "Rename", "✏️", discord.ButtonStyle.secondary, 3),
-    ("unverify", "Unverify", "❌", discord.ButtonStyle.danger, 3),
-    ("kick", "Kick unverified", "🚪", discord.ButtonStyle.danger, 3),
-    # row 4 — system
-    ("welcome", "Re-post welcome", "📌", discord.ButtonStyle.secondary, 4),
-    ("backup", "Backup", "💾", discord.ButtonStyle.secondary, 4),
-    ("status", "Status", "🖥️", discord.ButtonStyle.secondary, 4),
-    ("update", "Update", "🔄", discord.ButtonStyle.primary, 4),
-    ("restart", "Restart", "♻️", discord.ButtonStyle.danger, 4),
+B = discord.ButtonStyle
+# Each group = one message in the admin channel: title, short text per button, then the buttons.
+PANEL_GROUPS = [
+    ("Row 1 · 📢 Communication", discord.Color.blurple(), [
+        ("announce", "Announce", "📢", B.primary, "Pick section/course → write → posts in their announcement channel (can be scheduled)."),
+        ("dm", "DM students", "✉️", B.primary, "Pick section/course → write → every student gets a private DM."),
+        ("scheduled", "Scheduled posts", "🗓️", B.secondary, "See or cancel announcements waiting to be posted."),
+        ("invite", "Invite link", "🔗", B.secondary, "Invite link + ready message for Facebook / WhatsApp."),
+        ("files", "Marks / roster", "📎", B.secondary, "How to send marks by DM or upload the official list (needs a file)."),
+    ]),
+    ("Row 2 · 🗓️ Attendance", discord.Color.green(), [
+        ("att_start", "Start", "▶️", B.success, "Section → course → auto-stop time → Start."),
+        ("att_stop", "Stop", "⏹️", B.danger, "Stop → Excel with present/absent and minutes in class."),
+        ("att_status", "Running now", "⏱️", B.secondary, "Which attendance is running, how many joined."),
+        ("att_report", "Report", "📈", B.secondary, "Section → course → semester Excel with %."),
+        ("stats", "Stats", "📊", B.secondary, "Students per section and course."),
+    ]),
+    ("Row 3 · 🎓 Students", discord.Color.gold(), [
+        ("list", "Student list", "📋", B.secondary, "Section → list of verified students."),
+        ("excel", "Excel", "📗", B.success, "Student list as Excel (all / section / course)."),
+        ("find", "Find", "🔎", B.secondary, "Search by ID, name or Discord name."),
+        ("pending", "Pending", "🟡", B.secondary, "Requests waiting for Approve / Reject."),
+        ("notify", "Remind unverified", "🔔", B.secondary, "DM + mention everyone not verified yet."),
+    ]),
+    ("Row 4 · 👤 Manage members", discord.Color.orange(), [
+        ("verify", "Verify", "✅", B.success, "Member + section → ID and name → verified."),
+        ("move", "Move section", "🔀", B.primary, "Member + new section → moved."),
+        ("rename", "Rename", "✏️", B.secondary, "Member → correct name → nickname fixed."),
+        ("unverify", "Unverify", "❌", B.danger, "Member → access and record removed."),
+        ("kick", "Kick unverified", "🚪", B.danger, "Days → preview → kick people who never verified."),
+    ]),
+    ("Row 5 · ⚙️ System", discord.Color.dark_grey(), [
+        ("welcome", "Re-post welcome", "📌", B.secondary, "Re-post welcome buttons, instructor cards and this panel."),
+        ("backup", "Backup", "💾", B.secondary, "Zip of all data."),
+        ("status", "Status", "🖥️", B.secondary, "Uptime, Tinker Board temperature, RAM."),
+        ("update", "Update", "🔄", B.primary, "Get newest code from GitHub and restart."),
+        ("restart", "Restart", "♻️", B.danger, "Restart the bot (~15 s)."),
+    ]),
+    ("Row 6 · 📖 Help", discord.Color.teal(), [
+        ("allcmds", "All commands", "📖", B.primary, "Every text command with an example."),
+        ("panel", "Show panel here", "🎛️", B.secondary, "Open this whole panel privately, anywhere."),
+    ]),
 ]
 
 
 class PanelButton(discord.ui.Button):
-    def __init__(self, key, label, emoji, style, row):
+    def __init__(self, key, label, emoji, style, row=None):
         super().__init__(label=label, emoji=emoji, style=style, row=row, custom_id=f"nubtk:panel:{key}")
         self.key = key
 
@@ -570,14 +581,24 @@ class PanelButton(discord.ui.Button):
         await interaction.client.get_cog("Panel").handle(interaction, self.key)
 
 
-class AdminPanel(discord.ui.View):
+class GroupView(discord.ui.View):
+    """Buttons of one panel row (persistent)."""
+
+    def __init__(self, index: int):
+        super().__init__(timeout=None)
+        for key, label, emoji, style, _ in PANEL_GROUPS[index][2]:
+            self.add_item(PanelButton(key, label, emoji, style))
+
+
+class QuickView(discord.ui.View):
+    """Small buttons added under every bot message in the admin channels (persistent)."""
+
     def __init__(self):
         super().__init__(timeout=None)
-        for key, label, emoji, style, row in PANEL_BUTTONS:
-            self.add_item(PanelButton(key, label, emoji, style, row))
+        self.add_item(PanelButton("panel", "Panel", "🎛️", B.secondary))
+        self.add_item(PanelButton("allcmds", "All commands", "📖", B.secondary))
 
 
-# ====================================================================== cog
 class Panel(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -585,92 +606,91 @@ class Panel(commands.Cog):
         self.jobs: dict = load_json(SCHEDULE_FILE, {})
 
     async def cog_load(self):
-        self.bot.add_view(AdminPanel())
+        for i in range(len(PANEL_GROUPS)):
+            self.bot.add_view(GroupView(i))
+        self.bot.add_view(QuickView())
         self.scheduler.start()
 
     async def cog_unload(self):
         self.scheduler.cancel()
 
     # ------------------------------------------------------------ panel message
-    PANEL_GUIDE = [
-        ("📢 Row 1 · Communication", [
-            ("📢 Announce", "Pick section/course → write title + message → posts in their announcement channel. "
-                           "Fill *Schedule* to post later."),
-            ("✉️ DM students", "Pick section/course → write message → every student gets a private DM."),
-            ("🗓️ Scheduled posts", "See / cancel announcements waiting to be posted."),
-            ("🔗 Invite link", "Server invite link + ready message for Facebook / WhatsApp."),
-            ("📎 Marks / roster", "Shows how to send marks by DM or upload the official list (needs a file)."),
-        ]),
-        ("🗓️ Row 2 · Attendance", [
-            ("▶️ Start", "Section → course → auto-stop time → Start. Students join the section voice channel."),
-            ("⏹️ Stop", "Stops attendance → Excel with present/absent and minutes in class."),
-            ("⏱️ Running now", "Which attendance is running and how many joined."),
-            ("📈 Report", "Section → course → semester Excel with every class and %."),
-            ("📊 Stats", "How many students in each section and course."),
-        ]),
-        ("🎓 Row 3 · Students", [
-            ("📋 Student list", "Section → list of all verified students."),
-            ("📗 Excel", "Download the student list as Excel (all, a section or a course)."),
-            ("🔎 Find", "Search by Student ID, name or Discord name."),
-            ("🟡 Pending", "Requests waiting for approval (e.g. same ID used twice) with Approve / Reject."),
-            ("🔔 Remind unverified", "DM + mention everyone who has not verified yet."),
-        ]),
-        ("👤 Row 4 · Manage members", [
-            ("✅ Verify", "Pick member + section → type ID and name → verified."),
-            ("🔀 Move section", "Pick member + new section → moved (roles and nickname change)."),
-            ("✏️ Rename", "Pick member → type correct name → nickname fixed."),
-            ("❌ Unverify", "Pick member → access removed, record deleted."),
-            ("🚪 Kick unverified", "Choose days → preview list → kick people who never verified."),
-        ]),
-        ("⚙️ Row 5 · System", [
-            ("📌 Re-post welcome", "Re-post welcome buttons, instructor cards and this panel."),
-            ("💾 Backup", "Zip of all student data and attendance."),
-            ("🖥️ Status", "Is the bot healthy? Uptime, Tinker Board temperature, RAM."),
-            ("🔄 Update", "Get the newest code from GitHub now and restart."),
-            ("♻️ Restart", "Restart the bot (back in ~15 seconds)."),
-        ]),
-    ]
-
-    def panel_embed(self) -> discord.Embed:
-        e = discord.Embed(
-            title="🎛️ Control panel — how to use",
-            description=("Click a button below. A **private menu** opens (only you see it): choose from the "
-                         "dropdowns or fill the form. Results are posted in this channel.\n"
+    def header_embed(self) -> discord.Embed:
+        return discord.Embed(
+            title="🎛️ Control panel",
+            description=("Each row below says what its buttons do — the buttons are right under it.\n"
+                         "Click a button → a **private menu** opens (only you see it) → choose from the dropdowns "
+                         "or fill the form → the result is posted here.\n\n"
+                         "Every bot message here ends with **🎛️ Panel** and **📖 All commands** buttons, "
+                         "so you never have to scroll up.\n"
                          f"⚠️ `{self.s.prefix}setup_server` and `{self.s.prefix}reset_server` are typed commands "
                          "and always ask **Yes / Cancel** first."),
             color=discord.Color.blurple())
-        for title, items in self.PANEL_GUIDE:
-            e.add_field(name=title, value="\n".join(f"**{b}** — {d}" for b, d in items)[:1024], inline=False)
-        e.set_footer(text=f"Type {self.s.prefix}help for text commands with examples")
-        return e
+
+    def group_embed(self, index: int) -> discord.Embed:
+        title, color, items = PANEL_GROUPS[index]
+        body = "\n".join(f"{emoji} **{label}** — {desc}" for _, label, emoji, _, desc in items)
+        return discord.Embed(title=title, description=body, color=color)
 
     async def post_panel(self, channel: discord.TextChannel):
-        """Remove old pinned bot messages, then pin the help list + the panel."""
+        """Delete the old panel messages and post: header + one message per row (text + its buttons)."""
+        old = [x for x in str(self.bot.ids.data.get("panel_msgs", "")).split(",") if x.isdigit()]
+        for mid in old:
+            try:
+                await (await channel.fetch_message(int(mid))).delete()
+            except discord.HTTPException:
+                pass
         try:
-            async for m in channel.history(limit=100):
+            async for m in channel.history(limit=100):  # also clean old-style pinned panel/help
                 if m.author.id == self.bot.user.id and m.pinned:
                     try:
                         await m.delete()
                     except discord.HTTPException:
                         pass
-            admin = self.bot.get_cog("Admin")
-            help_msg = await channel.send(embeds=admin.help_embeds()) if admin else None
-            panel_msg = await channel.send(embed=self.panel_embed(), view=AdminPanel())
-            for m in (help_msg, panel_msg):
-                if m:
-                    await m.pin()
-            async for m in channel.history(limit=6):
+            ids = []
+            head = await channel.send(embed=self.header_embed())
+            ids.append(head.id)
+            for i in range(len(PANEL_GROUPS)):
+                msg = await channel.send(embed=self.group_embed(i), view=GroupView(i))
+                ids.append(msg.id)
+            await head.pin()
+            async for m in channel.history(limit=10):
                 if m.type == discord.MessageType.pins_add:
                     try:
                         await m.delete()
                     except discord.HTTPException:
                         pass
+            self.bot.ids.data["panel_msgs"] = ",".join(str(x) for x in ids)
+            self.bot.ids.save()
         except discord.HTTPException as e:
             log.warning("Could not post panel: %s", e)
+
+    async def send_panel_private(self, interaction: discord.Interaction):
+        await interaction.response.send_message(embed=self.header_embed(), ephemeral=True)
+        for i in range(len(PANEL_GROUPS)):
+            await interaction.followup.send(embed=self.group_embed(i), view=GroupView(i), ephemeral=True)
 
     @commands.command(name="panel")
     async def panel_cmd(self, ctx):
         await self.post_panel(ctx.channel)
+
+    # ------------------------------------------------------------ "🎛️ Panel" under every bot message
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.id != self.bot.user.id or message.components or message.flags.ephemeral:
+            return
+        ids = {c.id for c in (self.bot.channel_for("admin_channel"), self.bot.channel_for("log_channel")) if c}
+        if message.channel.id not in ids:
+            return
+        if message.type not in (discord.MessageType.default, discord.MessageType.reply):
+            return
+        panel_ids = str(self.bot.ids.data.get("panel_msgs", ""))
+        if str(message.id) in panel_ids or (message.embeds and (message.embeds[0].title or "").startswith("🎛️")):
+            return
+        try:
+            await message.edit(view=QuickView())
+        except discord.HTTPException:
+            pass
 
     # ------------------------------------------------------------ button dispatcher
     async def handle(self, interaction: discord.Interaction, key: str):
@@ -692,6 +712,13 @@ class Panel(commands.Cog):
             await run_command(interaction, name, *args, **kwargs)
             await interaction.followup.send("✅ Done.", ephemeral=True)
 
+        if key == "panel":
+            await self.send_panel_private(interaction)
+            return
+        if key == "allcmds":
+            admin = self.bot.get_cog("Admin")
+            await interaction.response.send_message(embeds=admin.help_embeds(), ephemeral=True)
+            return
         if key == "announce":
             await menu(TargetMenu(self, uid, "announce"),
                        "📢 **Announcement** — pick one or more targets, then click a button to write it.\n"
