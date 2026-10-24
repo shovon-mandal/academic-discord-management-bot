@@ -29,21 +29,21 @@ HELP = [
     ]),
     ("🎓 Students", [
         ("stats", "Count per section & course", "!stats"),
-        ("list <sec>", "All students of a section", "!list 2C"),
+        ("list <sec>", "All students of a section", "!list 3D"),
         ("find <id/name>", "Search a student", "!find 11250121964  ·  !find Rahim"),
-        ("verify @user <sec> <id> <name>", "Verify manually", "!verify @rahim 2C 11250121964 Rahim Uddin"),
+        ("verify @user <sec> <id> <name>", "Verify manually", "!verify @rahim 3D 11250121964 Rahim Uddin"),
         ("unverify @user", "Remove access + record", "!unverify @rahim"),
-        ("move @user <sec>", "Change section", "!move @rahim 2D"),
+        ("move @user <sec>", "Change section", "!move @rahim 3F"),
         ("rename @user <name>", "Fix name / nickname", "!rename @rahim Md Rahim Uddin"),
         ("pending", "Requests waiting for approval", "!pending"),
         ("notify_unverified", "Remind unverified members", "!notify_unverified"),
         ("kick_unverified <days> [confirm]", "List / kick never-verified", "!kick_unverified 7  →  !kick_unverified 7 confirm"),
-        ("roster_upload <sec>", "Upload official list (attach CSV)", "!roster_upload 2C  + attach 2C.csv"),
-        ("missing <sec>", "Roster students not joined yet", "!missing 2C"),
+        ("roster_upload <sec>", "Upload official list (attach CSV)", "!roster_upload 3D  + attach 3D.csv"),
+        ("missing <sec>", "Roster students not joined yet", "!missing 3D"),
     ]),
     ("📢 Communication", [
-        ("announce <target> <text>", "Post + ping (all / 2C / 2C:lab / CSE1205)",
-         "!announce 2C Class test on Sunday at 10 AM"),
+        ("announce <target> <text>", "Post + ping (all / 3D / 3D:lab / CSE2109)",
+         "!announce 3D Class test on Sunday at 10 AM"),
         ("announce_silent <target> <text>", "Same, no ping", "!announce_silent all Slides are uploaded"),
         ("dm <target> <text>", "DM every student", "!dm 4P Tomorrow's class is online"),
         ("marks_dm <title>", "Send each student their own marks (attach CSV/Excel)", "!marks_dm CT-1 Marks  + attach ct1.xlsx"),
@@ -51,19 +51,19 @@ HELP = [
     ]),
     ("🗓️ Routine & reminders", [
         ("routine_check", "Update routine: check the online sheet, update pinned routines, announce changes", "!routine_check"),
-        ("routine [sec] [all|mine]", "Show saved routine: full section / only my classes", "!routine 2C  ·  !routine 2C mine"),
+        ("routine [sec] [all|mine]", "Show saved routine: full section / only my classes", "!routine 3D  ·  !routine 3D mine"),
         ("routine_repost", "Re-post every section's pinned routine", "!routine_repost"),
         ("(right-click a message → Apps → ⏰ Set reminder)", "Re-announce a message now or later", "deadline / CT reminder"),
     ]),
     ("🗓️ Attendance", [
-        ("att_start <sec> [course] [minutes]", "Start voice attendance", "!att_start 2C 15  ·  !att_start 3D CSE2110"),
-        ("att_stop <sec>", "Stop + get CSV", "!att_stop 2C"),
+        ("att_start <sec> [course] [minutes]", "Start voice attendance", "!att_start 3D 15  ·  !att_start 3E CSE2110 30"),
+        ("att_stop <sec>", "Stop + get CSV", "!att_stop 3D"),
         ("att_status", "Running sessions", "!att_status"),
-        ("att_report <sec> [course]", "Semester % per student", "!att_report 2C CSE1205"),
+        ("att_report <sec> [course]", "Semester % per student", "!att_report 3D CSE2109"),
     ]),
     ("💾 Data & System", [
-        ("excel [target]", "Student list as Excel", "!excel  ·  !excel 2C  ·  !excel CSE2217"),
-        ("export [target]", "Student CSV/JSON files", "!export CSE1205 2C"),
+        ("excel [target]", "Student list as Excel", "!excel  ·  !excel 3D  ·  !excel CSE2217"),
+        ("export [target]", "Student CSV/JSON files", "!export CSE2109 3D"),
         ("backup", "Zip of all data", "!backup"),
         ("status", "Uptime, CPU temp, RAM", "!status"),
         ("logs [lines]", "Last log lines", "!logs 50"),
@@ -368,7 +368,7 @@ class Admin(commands.Cog):
     async def _announce(self, ctx, target: str, text: str, ping: bool, title: str = "📢 Announcement"):
         kind, val = self.resolve_target(target)
         if not kind:
-            raise commands.BadArgument("Target must be `all`, a section like `2C`, `2C:lab`, or a course like `CSE1205`.")
+            raise commands.BadArgument("Target must be `all`, a section like `3D`, `3D:lab`, or a course like `CSE2109`.")
         ch, roles, _, label = self.target_info(kind, val)
         if ch is None:
             raise commands.BadArgument("Announcement channel not found. Run `!setup_server`.")
@@ -399,7 +399,7 @@ class Admin(commands.Cog):
     async def dm(self, ctx, target: str, *, text: str):
         kind, val = self.resolve_target(target)
         if not kind:
-            raise commands.BadArgument("Target must be `all`, `2C`, or `CSE1205`.")
+            raise commands.BadArgument("Target must be `all`, `3D`, or `CSE2109`.")
         _, _, recipients, label = self.target_info(kind, val)
         status = await ctx.send(f"⏳ Sending DM to {len(recipients)} students ({label})...")
         embed = discord.Embed(title=f"📩 Message from {self.s.teacher}", description=text, color=BLUE,

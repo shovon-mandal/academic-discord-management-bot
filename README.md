@@ -17,15 +17,15 @@ PC (edit + test)  ──git push──▶  GitHub  ──!update──▶  Tinke
 - **Safe to run again.** It only creates what is missing, renames channels if you changed their names, and deletes channels you removed from the config.
 - **`!reset_server confirm`** deletes everything and builds a fresh server. Use it the first time if the server already has channels.
 - Every channel name has an icon, for example `📢┃announcement` and `💬┃general-text`.
-- **The member list is grouped by role:** Teacher first, then each section (Sec-2C, Sec-2D, …), each in its own color.
+- **The member list is grouped by role:** Teacher first, then each section (Sec-3D, Sec-3E, …), each in its own color.
 
 ### 👋 Easy student registration
 - New members get a welcome ping and a DM with simple steps.
 - The **welcome channel has one button per section**. A student clicks a button, a form opens asking for **Student ID** and **full name**, and they press Submit.
-- **Backup method:** students can type `2C 11250121964 Full Name` (any order) in `🪪┃id-name-section`.
+- **Backup method:** students can type `3D 11250121964 Full Name` (any order) in `🪪┃id-name-section`.
 - After verification the bot:
   - gives the section role, which opens the section, course group and All Students channels
-  - sets the nickname to `1964_2C_Full Name` (students cannot change it)
+  - sets the nickname to `1964_3D_Full Name` (students cannot change it)
   - hides the welcome area from that student
   - cleans up their messages in the ID channel
   - sends them a **"👉 Start here"** link to their section's pinned welcome message
@@ -47,17 +47,17 @@ Each section's `📢┃announcement` channel gets a pinned message with:
 
 ### 🛡️ Safety checks
 - **Duplicate Student ID:** if a second Discord account uses the same ID, the teacher gets **Approve / Reject** buttons.
-- **Official roster (optional):** upload the class list, see who hasn't joined yet (`!missing 2C`), and optionally hold back IDs that are not on the list.
+- **Official roster (optional):** upload the class list, see who hasn't joined yet (`!missing 3D`), and optionally hold back IDs that are not on the list.
 - **Rejoin:** a student who leaves and comes back gets their section and nickname back automatically.
 - Messages sent while the bot was offline are processed when it starts again.
 
 ### 📂 Separate data file for each course and section
 ```
-data/students/CSE1205_2C.csv   data/students/CSE1205_2C.json
-data/students/CSE1206_2C.csv   ...
+data/students/CSE2109_3D.csv   data/students/CSE2109_3D.json
+data/students/CSE2110_3D.csv   ...
 ```
 The CSV files open directly in Excel. The JSON files are for scripts.
-**`!excel`** sends one `.xlsx` file with a Summary sheet and one sheet for each course and section (`!excel 2C` or `!excel CSE1205` for just one).
+**`!excel`** sends one `.xlsx` file with a Summary sheet and one sheet for each course and section (`!excel 3D` or `!excel CSE2109` for just one).
 
 ### 🎛️ Button control panel
 A control panel is posted in `🛠️┃admin`: **one message per row**, each listing what its buttons do with the buttons right under it. Every bot message in the admin channel also ends with **🎛️ Panel** and **📖 All commands** buttons. A printable **user guide** is in [`docs/Class_Bot_User_Guide.pdf`](docs/Class_Bot_User_Guide.pdf). Each button opens a private menu where you pick the section, course, time or student from dropdowns and fill a short form, so you don't need to remember any commands.
@@ -75,7 +75,7 @@ A control panel is posted in `🛠️┃admin`: **one message per row**, each li
 `!setup_server` and `!reset_server` are **text only**. Both show a warning with **Yes / Cancel** buttons before doing anything.
 
 ### 🗓️ Voice attendance with time tracking
-- Start it from the panel (▶️) or with `!att_start 2C 15`. Students who join any voice channel of that section are marked present.
+- Start it from the panel (▶️) or with `!att_start 3D 15`. Students who join any voice channel of that section are marked present.
 - The bot records **when each student joined and left, and how long they stayed** (leaving and rejoining is counted correctly).
 - When attendance stops (by button, command or auto-stop), the bot posts an **Excel sheet** showing class date, start and stop time, class duration, and for each student: Present/Absent, first join, last leave, minutes in class, % of class time, and number of joins.
 - The **attendance report** (📈) is an Excel file with one column per class (`P (42m)` / `A`) plus total and %. Students below 60% are highlighted.
@@ -98,8 +98,8 @@ Re-announce an existing message (assignment deadline, CT notice…) now or later
 `!marks_dm CT-1 Marks` with a CSV or Excel file attached sends every student **only their own row** of marks by DM.
 
 ### 📢 Messages
-- `!announce 2C …`, `!announce 2C:lab …`, `!announce CSE1205 …`, `!announce all …` post an announcement and ping the students (attachments are included).
-- `!dm 2C …` sends a DM to every student in the section.
+- `!announce 3D …`, `!announce 3D:lab …`, `!announce CSE2109 …`, `!announce all …` post an announcement and ping the students (attachments are included).
+- `!dm 3D …` sends a DM to every student in the section.
 - `!invite` gives the invite link and a ready-made join guide for Facebook or WhatsApp groups.
 
 ### ⚙️ Remote control and backups
@@ -117,13 +117,12 @@ Re-announce an existing message (assignment deadline, CT notice…) now or later
    👋┃welcome   🪪┃id-name-section
 🏫 ALL STUDENTS       (every verified student)
    📌┃notice-board   🔊┃lounge
-🌐 CSE 1205/1206 · DLD · 2C, 2D                 ┐
-🌐 CSE 2109/2110 · OOP II · 3D, 3E               ├ shared by all sections of a course
+🌐 CSE 2109/2110 · OOP II · 3D, 3E, 3F, 3G       ┐ shared by all sections of a course
 🌐 CSE 2217 · Computer Architecture · 4B, 4P     ┘   📢┃course-announcement 📚┃course-resources 🔊┃combined class
-📘 2C · CSE 1205/1206 · DLD
+📘 3D · CSE 2109/2110 · OOP II
    📢┃announcement  💬┃general-text ✍️  📚┃resources  📊┃marks-sheet
    🎞️┃presentation-slide ✍️  🗓️┃routine  🧪┃lab  🔊┃voice channel
-📘 2D · 3D · 3E      (same, with 🧪┃lab)
+📘 3E · 3F · 3G      (same, with 🧪┃lab)
 📘 4B · 4P (Evening) (same, no lab channel)
 🔒 ADMIN             (teacher only)
    🛠️┃admin   📜┃bot-logs
@@ -133,8 +132,13 @@ Re-announce an existing message (assignment deadline, CT notice…) now or later
 ### Courses (Fall 2026)
 | Code | Course | Credit | Sections |
 |---|---|---|---|
-| CSE 1205 | Digital Logic Design | 3 | 2C, 2D |
-| CSE 1206 | Digital Logic Design Lab | 1 | 2C, 2D |
+| CSE 2109 | Object-Oriented Programming II | 3 | 3D, 3E, 3F, 3G |
+| CSE 2110 | Object-Oriented Programming II Lab | 1 | 3D, 3E, 3F, 3G |
+| CSE 2217 | Computer Architecture | 3 | 4B, 4P (Evening) |
+
+---|---|---|---|
+| CSE 2109 | Object-Oriented Programming II | 3 | 3D, 3E |
+| CSE 1206 | Object-Oriented Programming II Lab | 1 | 3D, 3E |
 | CSE 2109 | Object-Oriented Programming II | 3 | 3D, 3E |
 | CSE 2110 | Object-Oriented Programming II Lab | 1 | 3D, 3E |
 | CSE 2217 | Computer Architecture | 3 | 4B, 4P (Evening) |
@@ -206,31 +210,31 @@ Commands work only in `🛠️┃admin` or `📜┃bot-logs`, and only for the t
 | `!reset_server` | ⚠️ Delete EVERYTHING, build fresh (asks to confirm) | `!reset_server` |
 | **🎓 Students** | | |
 | `!stats` | Count per section & course | `!stats` |
-| `!list <sec>` | All students of a section | `!list 2C` |
+| `!list <sec>` | All students of a section | `!list 3D` |
 | `!find <id/name>` | Search a student | `!find 11250121964  ·  !find Rahim` |
-| `!verify @user <sec> <id> <name>` | Verify manually | `!verify @rahim 2C 11250121964 Rahim Uddin` |
+| `!verify @user <sec> <id> <name>` | Verify manually | `!verify @rahim 3D 11250121964 Rahim Uddin` |
 | `!unverify @user` | Remove access + record | `!unverify @rahim` |
-| `!move @user <sec>` | Change section | `!move @rahim 2D` |
+| `!move @user <sec>` | Change section | `!move @rahim 3E` |
 | `!rename @user <name>` | Fix name / nickname | `!rename @rahim Md Rahim Uddin` |
 | `!pending` | Requests waiting for approval | `!pending` |
 | `!notify_unverified` | Remind unverified members | `!notify_unverified` |
 | `!kick_unverified <days> [confirm]` | List / kick never-verified | `!kick_unverified 7  →  !kick_unverified 7 confirm` |
-| `!roster_upload <sec>` | Upload official list (attach CSV) | `!roster_upload 2C  + attach 2C.csv` |
-| `!missing <sec>` | Roster students not joined yet | `!missing 2C` |
+| `!roster_upload <sec>` | Upload official list (attach CSV) | `!roster_upload 3D  + attach 3D.csv` |
+| `!missing <sec>` | Roster students not joined yet | `!missing 3D` |
 | **📢 Communication** | | |
-| `!announce <target> <text>` | Post + ping (all / 2C / 2C:lab / CSE1205) | `!announce 2C Class test on Sunday at 10 AM` |
+| `!announce <target> <text>` | Post + ping (all / 3D / 3D:lab / CSE2109) | `!announce 3D Class test on Sunday at 10 AM` |
 | `!announce_silent <target> <text>` | Same, no ping | `!announce_silent all Slides are uploaded` |
 | `!dm <target> <text>` | DM every student | `!dm 4P Tomorrow's class is online` |
 | `!marks_dm <title>` | Send each student their own marks (attach CSV/Excel) | `!marks_dm CT-1 Marks  + attach ct1.xlsx` |
 | `!scheduled` | List / cancel scheduled announcements | `!scheduled` |
 | **🗓️ Attendance** | | |
-| `!att_start <sec> [course] [minutes]` | Start voice attendance | `!att_start 2C 15  ·  !att_start 3D CSE2110` |
-| `!att_stop <sec>` | Stop + get CSV | `!att_stop 2C` |
+| `!att_start <sec> [course] [minutes]` | Start voice attendance | `!att_start 3D 15  ·  !att_start 3D CSE2110` |
+| `!att_stop <sec>` | Stop + get CSV | `!att_stop 3D` |
 | `!att_status` | Running sessions | `!att_status` |
-| `!att_report <sec> [course]` | Semester % per student | `!att_report 2C CSE1205` |
+| `!att_report <sec> [course]` | Semester % per student | `!att_report 3D CSE2109` |
 | **💾 Data & System** | | |
-| `!excel [target]` | Student list as Excel | `!excel  ·  !excel 2C  ·  !excel CSE2217` |
-| `!export [target]` | Student CSV/JSON files | `!export CSE1205 2C` |
+| `!excel [target]` | Student list as Excel | `!excel  ·  !excel 3D  ·  !excel CSE2217` |
+| `!export [target]` | Student CSV/JSON files | `!export CSE2109 3D` |
 | `!backup` | Zip of all data | `!backup` |
 | `!status` | Uptime, CPU temp, RAM | `!status` |
 | `!logs [lines]` | Last log lines | `!logs 50` |

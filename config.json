@@ -47,18 +47,16 @@
   },
 
   "courses": {
-    "CSE1205": { "code": "CSE 1205", "title": "Digital Logic Design", "short": "DLD", "credit": 3, "type": "theory", "lab": "CSE1206" },
-    "CSE1206": { "code": "CSE 1206", "title": "Digital Logic Design Lab", "short": "DLD Lab", "credit": 1, "type": "lab" },
     "CSE2109": { "code": "CSE 2109", "title": "Object-Oriented Programming II", "short": "OOP II", "credit": 3, "type": "theory", "lab": "CSE2110" },
     "CSE2110": { "code": "CSE 2110", "title": "Object-Oriented Programming II Lab", "short": "OOP II Lab", "credit": 1, "type": "lab" },
     "CSE2217": { "code": "CSE 2217", "title": "Computer Architecture", "short": "Computer Architecture", "credit": 3, "type": "theory" }
   },
 
   "sections": {
-    "2C": { "courses": ["CSE1205", "CSE1206"], "color": "#e74c3c", "evening": false },
-    "2D": { "courses": ["CSE1205", "CSE1206"], "color": "#3498db", "evening": false },
     "3D": { "courses": ["CSE2109", "CSE2110"], "color": "#f1c40f", "evening": false },
     "3E": { "courses": ["CSE2109", "CSE2110"], "color": "#2ecc71", "evening": false },
+    "3F": { "courses": ["CSE2109", "CSE2110"], "color": "#e74c3c", "evening": false },
+    "3G": { "courses": ["CSE2109", "CSE2110"], "color": "#3498db", "evening": false },
     "4B": { "courses": ["CSE2217"], "color": "#9b59b6", "evening": false },
     "4P": { "courses": ["CSE2217"], "color": "#e67e22", "evening": true }
   },

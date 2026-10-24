@@ -1,4 +1,4 @@
-"""Parsing of student messages like '2C 11250121964 John Doe' (any order)."""
+"""Parsing of student messages like '3D 11250121964 John Doe' (any order)."""
 from __future__ import annotations
 
 import re

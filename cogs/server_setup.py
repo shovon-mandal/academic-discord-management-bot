@@ -36,7 +36,8 @@ class ServerSetup(commands.Cog):
             "This will make the server match **config.json**:\n"
             "• create missing roles, categories and channels\n"
             "• rename channels and **reset their permissions** to the config\n"
-            "• **delete channels that were removed from config.json** (their messages are lost)\n"
+            "• **delete channels, sections and their roles that were removed from config.json** "
+            "(their messages are lost)\n"
             "• re-post welcome buttons, instructor cards and this admin panel\n\n"
             "Students and their data are NOT affected.",
             "Yes, run setup", self._run_setup, danger=False)
@@ -270,7 +271,7 @@ class ServerSetup(commands.Cog):
                                               s.section_color(sec), True, stats)
         verified = await self._role(guild, "role:verified", s.verified_role_name, 0x95A5A6, False, stats)
 
-        # member list order (right sidebar): Teacher, Sec-2C, Sec-2D, ... then everyone else
+        # member list order (right sidebar): Teacher, Sec-3D, Sec-3E, ... then everyone else
         ordered = [teacher] + [sec_roles[x] for x in s.sections] + [verified]
         top = guild.me.top_role.position
         positions = {r: max(1, top - i - 1) for i, r in enumerate(ordered)}
@@ -306,7 +307,7 @@ class ServerSetup(commands.Cog):
         await self._text(guild, "welcome_channel", ch_cfg["welcome"], wcat, welcome_ow, stats,
                          topic="Start here → click your section button.")
         await self._text(guild, "id_channel", ch_cfg["id_channel"], wcat, id_ow, stats,
-                         topic="Button not working? Type: SECTION STUDENT_ID FULL_NAME  (e.g. 2C 11250121964 John Doe)",
+                         topic="Button not working? Type: SECTION STUDENT_ID FULL_NAME  (e.g. 3D 11250121964 John Doe)",
                          slowmode=s.id_slowmode)
 
         # 3) all students
@@ -317,7 +318,7 @@ class ServerSetup(commands.Cog):
         await self._channels_from_template(guild, "all", ch_cfg.get("all_students", []), acat, [verified], stats,
                                            {"section": "all", "courses": "all"})
 
-        # 4) course groups (e.g. CSE 1205/1206 for 2C + 2D)
+        # 4) course groups (e.g. CSE 1205/1206 for 3D + 3E)
         if s.course_group_categories:
             for theory, group in s.course_groups().items():
                 if len(group["sections"]) < 1:
@@ -374,6 +375,42 @@ class ServerSetup(commands.Cog):
                     log.warning("Could not delete %s: %s", ch, e)
                     continue
             self.bot.ids.data.pop(key, None)
+        self.bot.ids.save()
+
+        # 8) remove categories and section roles that are no longer in config.json
+        for key in list(self.bot.ids.data):
+            if not key.endswith(":category") or not key.startswith(("sec:", "group:")):
+                continue
+            part = key.split(":")[1]
+            still = (key.startswith("sec:") and part in s.sections) or \
+                    (key.startswith("group:") and s.course_group_categories and part in s.course_groups())
+            if still:
+                continue
+            cat = guild.get_channel(self.bot.ids.get(key))
+            if cat is not None:
+                for ch in list(getattr(cat, "channels", [])):
+                    try:
+                        await ch.delete(reason="Section/course removed from config.json")
+                        stats["removed"].append(ch.name)
+                    except discord.HTTPException:
+                        pass
+                try:
+                    await cat.delete(reason="Section/course removed from config.json")
+                    stats["removed"].append(cat.name)
+                except discord.HTTPException:
+                    pass
+            self.bot.ids.data.pop(key, None)
+            self.bot.ids.data.pop(f"sec:{part}:welcome_msg", None)
+        for key in list(self.bot.ids.data):
+            if key.startswith("role:sec:") and key.split(":", 2)[2] not in s.sections:
+                role = guild.get_role(self.bot.ids.get(key))
+                if role is not None:
+                    try:
+                        await role.delete(reason="Section removed from config.json")
+                        stats["removed"].append(f"role {role.name}")
+                    except discord.HTTPException:
+                        pass
+                self.bot.ids.data.pop(key, None)
         self.bot.ids.save()
 
         created = stats["created"]

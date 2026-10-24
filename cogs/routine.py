@@ -384,7 +384,7 @@ class Routine(commands.Cog):
 
     @commands.command(name="routine")
     async def routine_show(self, ctx, section: str = "", which: str = "both"):
-        """!routine · !routine 2C · !routine 2C all · !routine 2C mine"""
+        """!routine · !routine 3D · !routine 3D all · !routine 3D mine"""
         sec = self.s.normalize_section(section) if section else None
         if section and not sec:
             if section.lower() in ("all", "mine", "both"):

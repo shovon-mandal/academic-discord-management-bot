@@ -1,11 +1,11 @@
 """Voice-channel attendance with time tracking.
 
-Start:  !att_start 2C [CSE1206] [minutes]   (or the ▶️ button in the admin panel)
-        Every voice channel inside the 2C category counts.
-Stop:   !att_stop 2C                         (or ⏹️ button, or automatic after <minutes>)
+Start:  !att_start 3D [CSE2110] [minutes]   (or the ▶️ button in the admin panel)
+        Every voice channel inside the 3D category counts.
+Stop:   !att_stop 3D                         (or ⏹️ button, or automatic after <minutes>)
         → Excel file: Present/Absent, first join, last leave, minutes in class, % of class time
         → CSV copy (used by the semester report)
-Report: !att_report 2C [course]              → Excel with one column per class + total %
+Report: !att_report 3D [course]              → Excel with one column per class + total %
 """
 from __future__ import annotations
 

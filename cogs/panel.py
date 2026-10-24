@@ -274,7 +274,7 @@ class ReminderModal(discord.ui.Modal):
                                          style=discord.TextStyle.paragraph, max_length=1000,
                                          placeholder="e.g. Assignment 2 deadline is tomorrow 11:59 PM!")
         self.target = discord.ui.TextInput(label="Where? (empty = same as the message)",
-                                           required=False, max_length=40, placeholder="2C  ·  2C:lab  ·  CSE1205  ·  all")
+                                           required=False, max_length=40, placeholder="3D  ·  3D:lab  ·  CSE2109  ·  all")
         for x in (self.link, self.when, self.note, self.target):
             self.add_item(x)
 
@@ -288,7 +288,7 @@ class ReminderModal(discord.ui.Modal):
         target = (self.target.value or "").strip() or self.cog.reminder_target(msg.channel)
         kind, _ = self.cog.bot.get_cog("Admin").resolve_target(target)
         if not kind:
-            await interaction.followup.send(f"⚠️ `{target}` is not a valid target (all / 2C / 2C:lab / CSE1205).",
+            await interaction.followup.send(f"⚠️ `{target}` is not a valid target (all / 3D / 3D:lab / CSE2109).",
                                             ephemeral=True)
             return
         times = [t.strip() for t in (self.when.value or "").split(",") if t.strip()]
@@ -801,7 +801,7 @@ class Panel(commands.Cog):
         if key == "announce":
             await menu(TargetMenu(self, uid, "announce"),
                        "📢 **Announcement** — pick one or more targets, then click a button to write it.\n"
-                       "*(Need to attach a file? Use `!announce 2C your text` with the file attached.)*")
+                       "*(Need to attach a file? Use `!announce 3D your text` with the file attached.)*")
         elif key == "dm":
             await menu(TargetMenu(self, uid, "dm"), "✉️ **DM students** — pick targets, then write the message.")
         elif key == "excel":
@@ -817,8 +817,8 @@ class Panel(commands.Cog):
                 "📎 **Uploads need a file, so use a message:**\n"
                 f"• **Marks to each student by DM:** type `{p}marks_dm CT-1 Marks` and attach a CSV/Excel "
                 "(first row = column names, one column = Student ID).\n"
-                f"• **Official roster:** type `{p}roster_upload 2C` and attach a CSV (ID, Name).\n"
-                f"• **Announcement with a file:** type `{p}announce 2C your text` and attach the file.",
+                f"• **Official roster:** type `{p}roster_upload 3D` and attach a CSV (ID, Name).\n"
+                f"• **Announcement with a file:** type `{p}announce 3D your text` and attach the file.",
                 ephemeral=True)
         elif key == "att_start":
             m = AttStartMenu(self, uid)
