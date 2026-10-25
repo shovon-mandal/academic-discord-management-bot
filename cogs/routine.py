@@ -313,17 +313,15 @@ class Routine(commands.Cog):
         e.set_footer(text="Source: official department routine · this pinned message is always the latest")
         return e
 
-    VIEW_VERSION = 3  # bump when the buttons under the pinned routine change → auto re-post
+    VIEW_VERSION = 4  # bump when the buttons under the pinned routine change → auto re-post
 
     def _link_view(self):
-        """Under the pinned routine: students' 📅 buttons, 🔄 Update (teacher), 📄 sheet link."""
+        """Under the pinned routine: students' 📅 buttons + 📄 sheet link (teacher updates from the admin panel)."""
         v = discord.ui.View(timeout=None)
         v.add_item(discord.ui.Button(label="My section today (classes & deadlines)", emoji="📅", style=discord.ButtonStyle.primary,
                                      custom_id="nubtk:rt:today", row=0))
         v.add_item(discord.ui.Button(label="Tomorrow", emoji="📆", style=discord.ButtonStyle.secondary,
                                      custom_id="nubtk:rt:tomorrow", row=0))
-        v.add_item(discord.ui.Button(label="Update routine (teacher)", emoji="🔄", style=discord.ButtonStyle.success,
-                                     custom_id="nubtk:panel:routine_check", row=1))
         if self.sheet_url:
             v.add_item(discord.ui.Button(label="Open full routine sheet", emoji="📄", style=discord.ButtonStyle.link,
                                          url=self.sheet_url, row=1))
