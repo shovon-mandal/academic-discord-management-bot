@@ -17,7 +17,7 @@ from core.config import DATA_DIR
 from core.parsing import build_nickname, clean_name, parse_verification_text
 from core.storage import append_audit, load_roster
 
-WELCOME_VERSION = "3"  # bump → welcome/section cards re-post automatically after update
+WELCOME_VERSION = "4"  # bump → welcome/section cards re-post automatically after update
 
 log = logging.getLogger("nubtk.verify")
 
@@ -698,8 +698,10 @@ class Verification(commands.Cog):
     def id_embed(self) -> discord.Embed:
         ex = list(self.s.sections)[0]
         return discord.Embed(
-            title="📝 Manual verification",
-            description=("Send **one message** with your section, Student ID and full name (any order):\n"
+            title="📝 Verify here — 2 easy ways",
+            description=("**Way 1 (easy):** click your **section button** below 👇 → write your "
+                         "**Student ID** (11 digits) and **full name** → **Submit**. Done! 🎉\n\n"
+                         "**Way 2:** send **one message** here with your section, Student ID and full name:\n"
                          f"`{ex} 11250121964 John Doe`\n`John Doe {ex} 11250121964`\n\n"
                          "Wrong messages stay visible so you can see the error and send again. "
                          "After verification your messages here are deleted automatically."),
@@ -733,7 +735,7 @@ class Verification(commands.Cog):
         if wc:
             await self._post_pinned(wc, embed=self.welcome_embed(guild), view=SectionView(self.s))
         if idc:
-            await self._post_pinned(idc, embed=self.id_embed())
+            await self._post_pinned(idc, embed=self.id_embed(), view=SectionView(self.s))
         panel = self.bot.get_cog("Panel")
         if adm and panel:
             await panel.post_panel(adm)
