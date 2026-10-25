@@ -735,7 +735,7 @@ class Verification(commands.Cog):
         if wc:
             await self._post_pinned(wc, embed=self.welcome_embed(guild), view=SectionView(self.s))
         if idc:
-            await self._post_pinned(idc, embed=self.id_embed(), view=SectionView(self.s))
+            await self._post_pinned(idc, only_pinned=True, embed=self.id_embed(), view=SectionView(self.s))
         panel = self.bot.get_cog("Panel")
         if adm and panel:
             await panel.post_panel(adm)
