@@ -368,6 +368,43 @@ class Routine(commands.Cog):
             e.set_footer(text="Official department routine · this pinned message is always the latest")
         return e
 
+    @staticmethod
+    def _short_time(t: str) -> str:
+        m = re.findall(r"(\d{1,2}[.:]\d{2})\s*([AP]M)", t or "", re.I)
+        if len(m) == 2:
+            (a, ap), (b, bp) = m
+            a, b = a.replace(".", ":").zfill(5), b.replace(".", ":").zfill(5)
+            return f"{a}-{b} {bp.upper()}" if ap.upper() == bp.upper() else f"{a}{ap.upper()[0]}-{b}{bp.upper()[0]}"
+        return (t or "").replace(" ", "")[:15]
+
+    def _ansi_table(self, rows: list, mine_view: bool = False) -> str:
+        """Coloured table in a Discord ```ansi block (one line per class)."""
+        R, B = "\u001b[0m", "\u001b[1;"
+        blue, cyan, green, yellow, gray, white = "34m", "36m", "32m", "33m", "30m", "37m"
+        t = (self.teacher or "").upper()
+        head = f"{B}{white}  {'Day':<4} {'Time':<15} {'Room':<11} {'Course':<10}" + ("" if mine_view else "Fac") + R
+        out, prev = [head, f"\u001b[0;30m{'─' * (46 if mine_view else 50)}{R}"], None
+        for x in rows:
+            if x["day"] != prev and prev is not None:
+                out.append("")
+            day = x["day"][:3] if x["day"] != prev else ""
+            prev = x["day"]
+            ours = (not mine_view) and t and x["teacher"] == t
+            star = f"{B}{yellow}★{R}" if ours else " "
+            room = str(x["room"] or "—")[:11]
+            rc = green if "LAB" in room.upper() else white
+            cc = yellow if ours or mine_view else cyan
+            line = (f"{star} {B}{blue}{day:<4}{R} \u001b[0;{white}{self._short_time(x['time']):<15}{R} "
+                    f"\u001b[0;{rc}{room:<11}{R} {B}{cc}{x['course']:<10}{R}")
+            if not mine_view:
+                line += f"\u001b[{'1;' + yellow if ours else '0;' + gray}{x['teacher']}{R}"
+            else:
+                name = self._course_name(x["course"], True)
+                if name:
+                    line += f"\u001b[0;{gray}{name[:18]}{R}"
+            out.append(line)
+        return "```ansi\n" + "\n".join(out) + "\n```"
+
     async def routine_message(self, sec, items, effective, updated) -> tuple:
         """→ (embeds, files). Table image (Pillow) + my classes as text; text table if Pillow is missing."""
         from core import routine_image as ri
@@ -382,9 +419,8 @@ class Routine(commands.Cog):
         e = discord.Embed(title=f"🗓️ Section {sec}{eve} — Class Routine", color=discord.Color(s.section_color(sec)),
                           description=f"📅 **Effective from:** {effective or '—'}\n🕒 **Last updated:** {updated or '—'}")
         if mine:
-            e.add_field(name=f"👨‍🏫 Classes with {self.teacher}", inline=False, value="\n".join(
-                f"⭐ **{x['day'][:3]}** · `{x['time']}` · **{x['course']}** {self._course_name(x['course'], True)} · "
-                f"🏫 {x['room']}" for x in mine)[:1024])
+            e.add_field(name=f"👨‍🏫 Classes with {self.teacher}", inline=False,
+                        value=self._ansi_table(mine, mine_view=True)[:1024])
         files = []
         if ri.available():
             import asyncio
@@ -403,20 +439,12 @@ class Routine(commands.Cog):
                 e.set_image(url=f"attachment://{fname}")
             except Exception as ex:  # noqa: BLE001
                 log.warning("Routine image failed: %s", ex)
-        if not files:  # text table fallback
-            lines = []
-            prev = None
-            for x in rows:
-                star = "★" if t and x["teacher"] == t else " "
-                day = x["day"][:3] if x["day"] != prev else ""
-                prev = x["day"]
-                lines.append(f"{star}{day:<4}{x['time'].replace(' ', ''):<16}{str(x['room'])[:11]:<12}{x['course']:<10}{x['teacher']}")
-            table = "```\n Day Time            Room        Course    Fac\n" + "\n".join(lines) + "\n```"
-            e.description += "\n" + table[:3900 - len(e.description)]
+        if not files:  # coloured text table (no Pillow)
+            e.description += "\n\n**📚 Full routine**\n" + self._ansi_table(rows)
         e.set_footer(text="★ = class with " + (self.teacher or "me") + " · this pinned message is always the latest")
         return [e], files
 
-    VIEW_VERSION = 6  # bump when the buttons under the pinned routine change → auto re-post
+    VIEW_VERSION = 7  # bump when the buttons under the pinned routine change → auto re-post
 
     def _link_view(self):
         """Under the pinned routine: students' 📅 buttons + 📄 sheet link (teacher updates from the admin panel)."""
