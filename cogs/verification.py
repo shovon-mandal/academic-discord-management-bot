@@ -17,7 +17,7 @@ from core.config import DATA_DIR
 from core.parsing import build_nickname, clean_name, parse_verification_text
 from core.storage import append_audit, load_roster
 
-WELCOME_VERSION = "2"  # bump → welcome/section cards re-post automatically after update
+WELCOME_VERSION = "3"  # bump → welcome/section cards re-post automatically after update
 
 log = logging.getLogger("nubtk.verify")
 
@@ -428,7 +428,10 @@ class Verification(commands.Cog):
         if interaction.type != discord.InteractionType.component:
             return
         cid = (interaction.data or {}).get("custom_id", "")
-        if cid == "nubtk:extra:request":
+        if cid == "nubtk:extra:request":  # old button (removed) — only the teacher gives extra sections now
+            await interaction.response.send_message(
+                "Only the teacher can give access to another section. Please tell your teacher.", ephemeral=True)
+            return
             rec = self.bot.store.get(interaction.user.id)
             if not rec:
                 await interaction.response.send_message("Please verify first (welcome channel).", ephemeral=True)
@@ -828,8 +831,7 @@ class Verification(commands.Cog):
         for sec in self.s.sections:
             ch = self.bot.channel_for(f"sec:{sec}:announcement")
             if ch:
-                msg = await self._post_pinned(ch, only_pinned=True, embed=self.section_welcome_embed(sec, url),
-                                              view=self.extra_request_view())
+                msg = await self._post_pinned(ch, only_pinned=True, embed=self.section_welcome_embed(sec, url))
                 if msg:
                     self.bot.ids.set(f"sec:{sec}:welcome_msg", msg.id)
         for theory, group in self.s.course_groups().items():
@@ -838,7 +840,7 @@ class Verification(commands.Cog):
                 await self._post_pinned(ch, only_pinned=True, embed=self.group_welcome_embed(theory, group, url))
         ch = self.bot.channel_for("all:notice")
         if ch:
-            await self._post_pinned(ch, only_pinned=True, embed=self.all_welcome_embed(url), view=self.extra_request_view())
+            await self._post_pinned(ch, only_pinned=True, embed=self.all_welcome_embed(url))
 
     def section_link_url(self, sec: str) -> str:
         """URL that opens the section's announcement channel at the pinned welcome card."""
