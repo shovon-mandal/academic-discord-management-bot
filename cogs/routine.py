@@ -368,7 +368,55 @@ class Routine(commands.Cog):
             e.set_footer(text="Official department routine · this pinned message is always the latest")
         return e
 
-    VIEW_VERSION = 5  # bump when the buttons under the pinned routine change → auto re-post
+    async def routine_message(self, sec, items, effective, updated) -> tuple:
+        """→ (embeds, files). Table image (Pillow) + my classes as text; text table if Pillow is missing."""
+        from core import routine_image as ri
+        s = self.s
+        t = (self.teacher or "").upper()
+        eve = " (Evening)" if s.is_evening(sec) else ""
+        rows = sorted(items, key=lambda x: (DAYS.index(x["day"]), _time_key(x["time"]), x["course"]))
+        mine = [dict(x) for x in self.mine(rows)]
+        rows = [dict(x, title=self._course_name(x["course"])) for x in rows]
+        for x in mine:
+            x["title"] = self._course_name(x["course"])
+        e = discord.Embed(title=f"🗓️ Section {sec}{eve} — Class Routine", color=discord.Color(s.section_color(sec)),
+                          description=f"📅 **Effective from:** {effective or '—'}\n🕒 **Last updated:** {updated or '—'}")
+        if mine:
+            e.add_field(name=f"👨‍🏫 Classes with {self.teacher}", inline=False, value="\n".join(
+                f"⭐ **{x['day'][:3]}** · `{x['time']}` · **{x['course']}** {self._course_name(x['course'], True)} · "
+                f"🏫 {x['room']}" for x in mine)[:1024])
+        files = []
+        if ri.available():
+            import asyncio
+            col = s.section_color(sec)
+            accent = ((col >> 16) & 255, (col >> 8) & 255, col & 255)
+            if 0.299 * accent[0] + 0.587 * accent[1] + 0.114 * accent[2] > 120:  # too light for white text
+                accent = (36, 56, 128)
+            try:
+                png = await asyncio.to_thread(
+                    ri.render, sec, rows, mine, teacher=self.teacher, titles=self.titles, accent=accent,
+                    heading=f"Section {sec}{eve} — Class Routine",
+                    sub=f"Effective from {effective or '—'}   ·   Last updated {updated or '—'}",
+                    footer="Official department routine · NUBTK CSE · this pinned message is always the latest")
+                fname = f"routine_{sec}.png"
+                files.append(discord.File(io.BytesIO(png), filename=fname))
+                e.set_image(url=f"attachment://{fname}")
+            except Exception as ex:  # noqa: BLE001
+                log.warning("Routine image failed: %s", ex)
+        if not files:  # text table fallback
+            lines = []
+            prev = None
+            for x in rows:
+                star = "★" if t and x["teacher"] == t else " "
+                day = x["day"][:3] if x["day"] != prev else ""
+                prev = x["day"]
+                lines.append(f"{star}{day:<4}{x['time'].replace(' ', ''):<16}{str(x['room'])[:11]:<12}{x['course']:<10}{x['teacher']}")
+            table = "```\n Day Time            Room        Course    Fac\n" + "\n".join(lines) + "\n```"
+            e.description += "\n" + table[:3900 - len(e.description)]
+        e.set_footer(text="★ = class with " + (self.teacher or "me") + " · this pinned message is always the latest")
+        return [e], files
+
+    VIEW_VERSION = 6  # bump when the buttons under the pinned routine change → auto re-post
 
     def _link_view(self):
         """Under the pinned routine: students' 📅 buttons + 📄 sheet link (teacher updates from the admin panel)."""
@@ -529,7 +577,7 @@ class Routine(commands.Cog):
         offset = 1 if cid.endswith("tomorrow") else 0
         await interaction.response.send_message(embed=self.section_day_embed(sec, offset), ephemeral=True)
 
-    async def _replace_pinned(self, sec, embeds) -> int | None:
+    async def _replace_pinned(self, sec, embeds, files=None) -> int | None:
         ch = self.bot.channel_for(f"sec:{sec}:routine")
         if ch is None:
             return None
@@ -549,6 +597,8 @@ class Routine(commands.Cog):
                 except discord.HTTPException:
                     pass
         kw = {"embeds": embeds, "view": self._link_view()}
+        if files:
+            kw["files"] = files
         msg = await ch.send(**kw)
         try:
             await msg.pin()
@@ -584,11 +634,8 @@ class Routine(commands.Cog):
             if first_time or changed or eff_changed or not updated:
                 updated = self.s.now().strftime("%d %b %Y, %I:%M %p")
             if first_time or changed or eff_changed or force_repost or not prev.get("msg_id"):
-                mine = self.mine(items)
-                embeds = [self.routine_embed(sec, items, effective, "all", updated)]
-                if mine:
-                    embeds.append(self.routine_embed(sec, mine, effective, "mine", updated))
-                mid = await self._replace_pinned(sec, embeds)
+                embeds, files = await self.routine_message(sec, items, effective, updated)
+                mid = await self._replace_pinned(sec, embeds, files)
                 prev = {"entries": items, "effective": effective, "msg_id": mid, "updated": updated}
                 self.state[sec] = prev
             if changed:
@@ -749,20 +796,20 @@ class Routine(commands.Cog):
             else:
                 raise commands.BadArgument(f"Unknown section. Valid: {', '.join(self.s.sections)}")
         secs = [sec] if sec else list(self.s.sections)
-        embeds = []
+        sent = 0
         for x in secs:
             st = self.state.get(x)
             if not st:
                 continue
             items = st.get("entries", [])
-            if which in ("both", "all"):
-                embeds.append(self.routine_embed(x, items, st.get("effective", ""), "all", st.get("updated", "")))
-            if which in ("both", "mine"):
-                embeds.append(self.routine_embed(x, self.mine(items), st.get("effective", ""), "mine", st.get("updated", "")))
-        if not embeds:
+            if which == "mine":
+                await ctx.send(embed=self.routine_embed(x, self.mine(items), st.get("effective", ""), "mine"))
+            else:
+                embeds, files = await self.routine_message(x, items, st.get("effective", ""), st.get("updated", ""))
+                await ctx.send(embeds=embeds, files=files)
+            sent += 1
+        if not sent:
             raise commands.BadArgument("No routine saved yet — run `!routine_check` first.")
-        for i in range(0, len(embeds), 4):
-            await ctx.send(embeds=embeds[i:i + 4])
 
 
 async def setup(bot):

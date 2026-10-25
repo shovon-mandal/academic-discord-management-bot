@@ -14,7 +14,7 @@ echo "==> App folder: $APP_DIR   (runs as user: $RUN_USER)"
 if command -v apt-get >/dev/null 2>&1; then
   echo "==> Installing system packages (git, venv, build tools)..."
   sudo apt-get update || echo "   (apt update had problems — continuing)"
-  sudo apt-get install -y git python3-venv python3-dev build-essential libffi-dev curl || \
+  sudo apt-get install -y git python3-venv python3-dev build-essential libffi-dev libjpeg-dev zlib1g-dev curl || \
     echo "   (some packages could not be installed — continuing)"
 fi
 
