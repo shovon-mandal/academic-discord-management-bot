@@ -568,14 +568,9 @@ class Routine(commands.Cog):
         if not items:
             e.description += "\n🎉 No classes."
         else:
-            e.description += "\n**🏫 Classes**"
-            lines = []
-            for it in items:
-                title = self.titles.get(it["course"]) or next(
-                    (i["title"] for i in self.s.courses.values() if i["code"].upper() == it["course"]), "")
-                star = "⭐ " if it["teacher"] == t else ""
-                lines.append(f"{star}🕘 **{it['time']}**\n   **{it['course']}** {title[:45]} · 🏫 Room **{it['room']}** · 👨‍🏫 {it['teacher']}")
-            e.description += "\n" + "\n".join(lines)
+            e.description += self._ansi_grid(items, [("Time", 15, "time"), ("Room", 11, "room"), ("Course", 9, "course"),
+                                                    ("Fac", 5, "teacher")], group_day=False)
+            e.description += "\n" + self._course_legend(items)
         self.add_event_fields(e, sec, offset)
         e.set_footer(text="Only you can see this · from the official routine")
         return e
@@ -715,6 +710,8 @@ class Routine(commands.Cog):
                 c = colour.get(key, "0;37")
                 if key == "room" and "LAB" in val.upper():
                     c = "0;32"
+                if key == "teacher" and self.teacher and val.upper() == self.teacher.upper():
+                    c = "1;33"
                 cells.append(f"\u001b[{c}m{val:<{w}}{R}")
             prev = x["day"]
             out.append(" ".join(cells))
@@ -722,7 +719,8 @@ class Routine(commands.Cog):
 
     def _course_legend(self, items) -> str:
         codes = sorted({it["course"] for it in items})
-        return " · ".join(f"**{c}** {self._course_name(c, True)}" for c in codes)
+        parts = [f"**{c}** {self._course_name(c, True)}" for c in codes]
+        return "\n".join(parts)[:1000]
 
     def day_embed(self, day: str, label: str) -> discord.Embed:
         items = self.my_classes(day)
@@ -861,7 +859,12 @@ class Routine(commands.Cog):
                 continue
             items = st.get("entries", [])
             if which == "mine":
-                await ctx.send(embed=self.routine_embed(x, self.mine(items), st.get("effective", ""), "mine"))
+                mine = self.mine(items)
+                e = discord.Embed(title=f"👨‍🏫 Section {x} — classes with {self.teacher}", color=discord.Color.gold(),
+                                  description=(self._ansi_grid(mine, [("Day", 4, "day"), ("Time", 15, "time"),
+                                                                      ("Room", 11, "room"), ("Course", 9, "course")])
+                                               + "\n" + self._course_legend(mine)) if mine else "No classes.")
+                await ctx.send(embed=e)
             else:
                 embeds, files = await self.routine_message(x, items, st.get("effective", ""), st.get("updated", ""))
                 await ctx.send(embeds=embeds, files=files)
