@@ -17,6 +17,8 @@ from core.config import DATA_DIR
 from core.parsing import build_nickname, clean_name, parse_verification_text
 from core.storage import append_audit, load_roster
 
+WELCOME_VERSION = "2"  # bump → welcome/section cards re-post automatically after update
+
 log = logging.getLogger("nubtk.verify")
 
 GREEN, RED, GOLD, BLUE, ORANGE = (discord.Color.green(), discord.Color.red(), discord.Color.gold(),
@@ -209,11 +211,14 @@ class Verification(commands.Cog):
             return False, "The server is not fully set up yet. Please try again later."
 
         old_rec = self.bot.store.get(member.id)
-        remove = [r for r in member.roles if r.id in self.section_role_ids() and r.id != sec_role.id]
+        extras = [x for x in ((old_rec or {}).get("extra_sections") or []) if x in s.sections and x != sec]
+        keep_ids = {sec_role.id} | {r.id for r in (self.bot.role_for(f"role:sec:{x}") for x in extras) if r}
+        remove = [r for r in member.roles if r.id in self.section_role_ids() and r.id not in keep_ids]
+        extra_roles = [r for r in (self.bot.role_for(f"role:sec:{x}") for x in extras) if r and r not in member.roles]
         try:
             if remove:
                 await member.remove_roles(*remove, reason=f"Section change → {sec}")
-            await member.add_roles(sec_role, verified_role, reason=f"Verified {sec} {sid} ({by})")
+            await member.add_roles(sec_role, verified_role, *extra_roles, reason=f"Verified {sec} {sid} ({by})")
         except discord.Forbidden:
             await self.bot.send_log("❌ Permission error",
                                     f"Could not give roles to {member.mention}. Move the bot role to the top.",
@@ -235,7 +240,8 @@ class Verification(commands.Cog):
             "student_id": sid,
             "name": name,
             "nickname": nick,
-            "courses": [s.courses[c]["code"] for c in s.section_courses(sec)],
+            "extra_sections": extras,
+            "courses": sorted({s.courses[c]["code"] for x in [sec, *extras] for c in s.section_courses(x)}),
             "status": "active",
             "verified_at": old_rec.get("verified_at") if old_rec and old_rec.get("section") == sec else s.now_str(),
             "updated_at": s.now_str(),
@@ -340,6 +346,9 @@ class Verification(commands.Cog):
         member = guild.get_member(int(item["discord_id"]))
         if member is None:
             result, color = "Member has left the server.", RED
+        elif action == "approve" and item.get("type") == "extra":
+            ok, text = await self.add_extra_sections(guild, member, [item["section"]], by=f"admin:{interaction.user.name}")
+            result, color = ("Approved ✅ — " + text if ok else f"Failed: {text}"), (GREEN if ok else RED)
         elif action == "approve":
             ok, text = await self.apply_verification(guild, member, item["section"], item["student_id"],
                                                      item["name"], by=f"admin:{interaction.user.name}")
@@ -360,6 +369,103 @@ class Verification(commands.Cog):
             await interaction.message.edit(embed=embed, view=None)
         except discord.HTTPException:
             pass
+
+    # ---------------------------------------------------------- extra sections (student in 3D AND 4B …)
+    async def add_extra_sections(self, guild, member, secs, by="admin") -> tuple:
+        rec = self.bot.store.get(member.id)
+        if not rec:
+            return False, "This member is not verified yet."
+        secs = [x for x in secs if x in self.s.sections and x != rec["section"]]
+        if not secs:
+            return False, "Nothing to add (already their main section?)."
+        extras = list(dict.fromkeys([*(rec.get("extra_sections") or []), *secs]))
+        roles = [r for r in (self.bot.role_for(f"role:sec:{x}") for x in secs) if r]
+        try:
+            await member.add_roles(*roles, reason=f"Extra section(s) {', '.join(secs)} ({by})")
+        except discord.Forbidden:
+            return False, "Bot permission problem (move the bot role to the top)."
+        courses = sorted({self.s.courses[c]["code"] for x in [rec["section"], *extras] for c in self.s.section_courses(x)})
+        self.bot.store.update(member.id, extra_sections=extras, courses=courses, updated_at=self.s.now_str())
+        append_audit(self.s, "extra_sections_added", discord_id=str(member.id), sections=secs, by=by)
+        await self.bot.send_log("➕ Extra section added", f"{member.mention} → **{', '.join(secs)}** "
+                                f"(main: {rec['section']}) · by `{by}`", GREEN)
+        try:
+            await member.send(embed=discord.Embed(
+                title="➕ You got access to another section",
+                description=f"Server: **{guild.name}**\nNow also in: **{', '.join(secs)}** "
+                            f"({'; '.join(self.s.section_courses_text(x) for x in secs)})",
+                color=GREEN))
+        except discord.HTTPException:
+            pass
+        return True, f"{member.display_name}: main **{rec['section']}** + extra **{', '.join(extras)}**"
+
+    async def remove_extra_sections(self, guild, member, secs, by="admin") -> tuple:
+        rec = self.bot.store.get(member.id)
+        if not rec:
+            return False, "This member is not verified."
+        extras = [x for x in (rec.get("extra_sections") or []) if x not in secs]
+        roles = [r for r in (self.bot.role_for(f"role:sec:{x}") for x in secs) if r and r in member.roles
+                 and x != rec["section"]]
+        try:
+            if roles:
+                await member.remove_roles(*roles, reason=f"Extra section removed ({by})")
+        except discord.Forbidden:
+            return False, "Bot permission problem."
+        courses = sorted({self.s.courses[c]["code"] for x in [rec["section"], *extras] for c in self.s.section_courses(x)})
+        self.bot.store.update(member.id, extra_sections=extras, courses=courses, updated_at=self.s.now_str())
+        append_audit(self.s, "extra_sections_removed", discord_id=str(member.id), sections=secs, by=by)
+        return True, f"{member.display_name}: main **{rec['section']}**" + (f" + extra **{', '.join(extras)}**" if extras else "")
+
+    def extra_request_view(self):
+        v = discord.ui.View(timeout=None)
+        v.add_item(discord.ui.Button(label="I also take a course in another section", emoji="➕",
+                                     style=discord.ButtonStyle.secondary, custom_id="nubtk:extra:request"))
+        v.stop()
+        return v
+
+    @commands.Cog.listener("on_interaction")
+    async def _extra_interaction(self, interaction: discord.Interaction):
+        if interaction.type != discord.InteractionType.component:
+            return
+        cid = (interaction.data or {}).get("custom_id", "")
+        if cid == "nubtk:extra:request":
+            rec = self.bot.store.get(interaction.user.id)
+            if not rec:
+                await interaction.response.send_message("Please verify first (welcome channel).", ephemeral=True)
+                return
+            have = {rec["section"], *(rec.get("extra_sections") or [])}
+            opts = [discord.SelectOption(label=f"Section {x}", value=x, description=self.s.section_courses_text(x)[:100])
+                    for x in self.s.sections if x not in have]
+            if not opts:
+                await interaction.response.send_message("You already have every section.", ephemeral=True)
+                return
+            v = discord.ui.View(timeout=300)
+            sel = discord.ui.Select(placeholder="Which other section do you take a course in?", options=opts[:25],
+                                    custom_id="nubtk:extra:pick")
+            v.add_item(sel)
+            v.stop()
+            await interaction.response.send_message(
+                f"Your main section is **{rec['section']}**. Choose the other section — the teacher will approve it.",
+                view=v, ephemeral=True)
+        elif cid == "nubtk:extra:pick":
+            rec = self.bot.store.get(interaction.user.id)
+            sec = (interaction.data.get("values") or [None])[0]
+            if not rec or sec not in self.s.sections:
+                await interaction.response.send_message("Something went wrong, try again.", ephemeral=True)
+                return
+            if self.bot.pending.find_by_member(interaction.user.id):
+                await interaction.response.edit_message(content="⏳ You already have a request waiting.", view=None)
+                return
+            member = interaction.guild.get_member(interaction.user.id)
+            await self.create_pending(interaction.guild, member, sec, rec["student_id"], rec["name"],
+                                      [f"Wants EXTRA section {sec} (main: {rec['section']}) — e.g. retake / improvement"],
+                                      "extra-request")
+            item = self.bot.pending.find_by_member(interaction.user.id)
+            if item:
+                item[1]["type"] = "extra"
+                self.bot.pending.save()
+            await interaction.response.edit_message(
+                content=f"✅ Request sent: **{sec}**. You'll get a DM when the teacher approves it.", view=None)
 
     # ---------------------------------------------------------- ID channel (typed messages)
     async def cleanup_id_channel(self, guild, member):
@@ -474,6 +580,18 @@ class Verification(commands.Cog):
         self._scanned = True
         await asyncio.sleep(3)
         flag = DATA_DIR / ".repost_welcome"
+        vfile = DATA_DIR / ".welcome_version"
+        try:
+            old_v = vfile.read_text().strip()
+        except OSError:
+            old_v = ""
+        if old_v != WELCOME_VERSION:
+            flag.parent.mkdir(parents=True, exist_ok=True)
+            flag.write_text("1")
+            try:
+                vfile.write_text(WELCOME_VERSION)
+            except OSError:
+                pass
         if flag.exists():
             try:
                 flag.unlink()
@@ -482,7 +600,7 @@ class Verification(commands.Cog):
             g = self.bot.main_guild()
             if g:
                 await self.post_welcome_messages(g)
-                await self.bot.send_log("📌 Welcome messages re-posted", "config.json was updated.")
+                await self.bot.send_log("📌 Welcome messages re-posted", "New version / config.json was updated.")
         v, e = await self.scan_id_channel(reply_errors=False)
         if v or e:
             await self.bot.send_log("🕒 Offline messages processed", f"Verified: **{v}** · Not valid yet: **{e}**")
@@ -710,7 +828,8 @@ class Verification(commands.Cog):
         for sec in self.s.sections:
             ch = self.bot.channel_for(f"sec:{sec}:announcement")
             if ch:
-                msg = await self._post_pinned(ch, only_pinned=True, embed=self.section_welcome_embed(sec, url))
+                msg = await self._post_pinned(ch, only_pinned=True, embed=self.section_welcome_embed(sec, url),
+                                              view=self.extra_request_view())
                 if msg:
                     self.bot.ids.set(f"sec:{sec}:welcome_msg", msg.id)
         for theory, group in self.s.course_groups().items():
@@ -719,7 +838,7 @@ class Verification(commands.Cog):
                 await self._post_pinned(ch, only_pinned=True, embed=self.group_welcome_embed(theory, group, url))
         ch = self.bot.channel_for("all:notice")
         if ch:
-            await self._post_pinned(ch, only_pinned=True, embed=self.all_welcome_embed(url))
+            await self._post_pinned(ch, only_pinned=True, embed=self.all_welcome_embed(url), view=self.extra_request_view())
 
     def section_link_url(self, sec: str) -> str:
         """URL that opens the section's announcement channel at the pinned welcome card."""

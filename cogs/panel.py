@@ -557,7 +557,9 @@ class MemberMenu(BaseMenu):
     """action: verify | move | rename | unverify"""
 
     TITLES = {"verify": "✅ Verify a member", "move": "🔀 Move to another section",
-              "rename": "✏️ Fix a student's name", "unverify": "❌ Remove a student's access"}
+              "rename": "✏️ Fix a student's name", "unverify": "❌ Remove a student's access",
+              "extra_add": "➕ Give an EXTRA section (student stays in the main one too)",
+              "extra_remove": "➖ Remove an extra section"}
 
     def __init__(self, cog, user_id, action):
         super().__init__(cog, user_id)
@@ -567,6 +569,12 @@ class MemberMenu(BaseMenu):
         us = discord.ui.UserSelect(placeholder="Choose the member", min_values=1, max_values=1, row=0)
         us.callback = self._member
         self.add_item(us)
+        if action in ("extra_add", "extra_remove"):
+            opts = section_options(cog.s)
+            ss = discord.ui.Select(placeholder="Choose section(s)", options=opts, row=1, min_values=1,
+                                   max_values=len(opts))
+            ss.callback = self._secs
+            self.add_item(ss)
         if action in ("verify", "move"):
             ss = discord.ui.Select(placeholder="Choose section", options=section_options(cog.s), row=1)
             ss.callback = self._sec
@@ -574,7 +582,9 @@ class MemberMenu(BaseMenu):
         label, style, emoji = {"verify": ("Enter ID & name", discord.ButtonStyle.success, "🪪"),
                                "move": ("Move", discord.ButtonStyle.primary, "🔀"),
                                "rename": ("Enter new name", discord.ButtonStyle.primary, "✏️"),
-                               "unverify": ("Remove access", discord.ButtonStyle.danger, "❌")}[action]
+                               "unverify": ("Remove access", discord.ButtonStyle.danger, "❌"),
+                               "extra_add": ("Add", discord.ButtonStyle.success, "➕"),
+                               "extra_remove": ("Remove", discord.ButtonStyle.secondary, "➖")}[action]
         b = discord.ui.Button(label=label, style=style, emoji=emoji, row=2)
         b.callback = self._go
         self.add_item(b)
@@ -587,10 +597,24 @@ class MemberMenu(BaseMenu):
         self.sec = interaction.data["values"][0]
         await interaction.response.defer()
 
+    async def _secs(self, interaction):
+        self.secs = list(interaction.data["values"])
+        self.sec = self.secs[0]
+        await interaction.response.defer()
+
     async def _go(self, interaction):
         member = interaction.guild.get_member(self.member_id) if self.member_id else None
         if not member:
             await interaction.response.send_message("Choose a member first.", ephemeral=True)
+            return
+        if self.action in ("extra_add", "extra_remove"):
+            if not getattr(self, "secs", None):
+                await interaction.response.send_message("Choose section(s) first.", ephemeral=True)
+                return
+            await interaction.response.edit_message(content="⏳", view=None, embed=None)
+            await run_command(interaction, "add_section" if self.action == "extra_add" else "remove_section",
+                              member, *self.secs)
+            await done(interaction)
             return
         if self.action in ("verify", "move") and not self.sec:
             await interaction.response.send_message("Choose a section first.", ephemeral=True)
@@ -700,6 +724,8 @@ PANEL_GROUPS = [
         ("rename", "Rename", "✏️", B.secondary, "Member → correct name → nickname fixed."),
         ("unverify", "Unverify", "❌", B.danger, "Member → access and record removed."),
         ("kick", "Kick unverified", "🚪", B.danger, "Days → preview → kick people who never verified."),
+        ("extra_add", "Add extra section", "➕", B.success, "Student in two sections (e.g. 3D + 4B): member → extra section(s)."),
+        ("extra_remove", "Remove extra section", "➖", B.secondary, "Take away an extra section."),
     ]),
     ("Row 5 · ⚙️ System", discord.Color.dark_grey(), [
         ("welcome", "Re-post welcome", "📌", B.secondary, "Re-post welcome buttons, instructor cards and this panel."),
@@ -974,7 +1000,7 @@ class Panel(commands.Cog):
                 await done(i)
             await menu(ConfirmView(self, uid, go, label="Send reminders", danger=False),
                        "🔔 DM + mention **every unverified member**?")
-        elif key in ("verify", "move", "rename", "unverify"):
+        elif key in ("verify", "move", "rename", "unverify", "extra_add", "extra_remove"):
             await menu(MemberMenu(self, uid, key), MemberMenu.TITLES[key])
         elif key == "kick":
             await menu(KickMenu(self, uid), "🚪 **Kick unverified members** — choose days, preview, then kick.")

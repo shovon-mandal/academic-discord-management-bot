@@ -225,6 +225,8 @@ Commands work only in `🛠️┃admin` or `📜┃bot-logs`, and only for the t
 | `!unverify @user` | Remove access + record | `!unverify @rahim` |
 | `!move @user <sec>` | Change section | `!move @rahim 3E` |
 | `!rename @user <name>` | Fix name / nickname | `!rename @rahim Md Rahim Uddin` |
+| `!add_section @user <sec…>` | Give an extra section (student in 3D **and** 4B). Students can also request it with the ➕ button on their section card | `!add_section @rahim 4B` |
+| `!remove_section @user <sec…>` | Remove an extra section | `!remove_section @rahim 4B` |
 | `!pending` | Requests waiting for approval | `!pending` |
 | `!notify_unverified` | Remind unverified members | `!notify_unverified` |
 | `!kick_unverified <days> [confirm]` | List / kick never-verified | `!kick_unverified 7  →  !kick_unverified 7 confirm` |

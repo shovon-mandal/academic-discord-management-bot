@@ -35,6 +35,8 @@ HELP = [
         ("unverify @user", "Remove access + record", "!unverify @rahim"),
         ("move @user <sec>", "Change section", "!move @rahim 3F"),
         ("rename @user <name>", "Fix name / nickname", "!rename @rahim Md Rahim Uddin"),
+        ("add_section @user <sec…>", "Give access to an EXTRA section (student in 3D and 4B)", "!add_section @rahim 4B"),
+        ("remove_section @user <sec…>", "Remove an extra section", "!remove_section @rahim 4B"),
         ("pending", "Requests waiting for approval", "!pending"),
         ("notify_unverified", "Remind unverified members", "!notify_unverified"),
         ("kick_unverified <days> [confirm]", "List / kick never-verified", "!kick_unverified 7  →  !kick_unverified 7 confirm"),
@@ -216,6 +218,7 @@ class Admin(commands.Cog):
             return
         lines = [f"Section {sec} · {self.s.section_courses_text(sec)} · {len(rows)} students", ""]
         lines += [f"{i:>3}. {r['student_id']}  {r['name'][:28]:<28} @{r.get('discord_name', '')}"
+                  + ("" if r.get("section") == sec else f"  (extra, main {r.get('section')})")
                   for i, r in enumerate(rows, 1)]
         await self.send_long(ctx, "\n".join(lines), filename=f"{sec}_list.txt")
 
@@ -257,6 +260,20 @@ class Admin(commands.Cog):
         ok, text = await self.ver.apply_verification(ctx.guild, member, sec, rec["student_id"], rec["name"],
                                                      by=f"admin-move:{ctx.author.name}")
         await ctx.send(("✅ Moved. " if ok else "❌ ") + text)
+
+    @commands.command(name="add_section")
+    async def add_section(self, ctx, member: discord.Member, *sections: str):
+        secs = [self.need_section(x) for x in sections]
+        if not secs:
+            raise commands.BadArgument("Write at least one section, e.g. `!add_section @rahim 4B`.")
+        ok, text = await self.ver.add_extra_sections(ctx.guild, member, secs, by=f"admin:{ctx.author.name}")
+        await ctx.send(("✅ " if ok else "❌ ") + text)
+
+    @commands.command(name="remove_section")
+    async def remove_section(self, ctx, member: discord.Member, *sections: str):
+        secs = [self.need_section(x) for x in sections]
+        ok, text = await self.ver.remove_extra_sections(ctx.guild, member, secs, by=f"admin:{ctx.author.name}")
+        await ctx.send(("✅ " if ok else "❌ ") + text)
 
     @commands.command(name="rename")
     async def rename(self, ctx, member: discord.Member, *, name: str):

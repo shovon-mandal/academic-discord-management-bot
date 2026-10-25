@@ -127,14 +127,18 @@ class StudentStore:
     def section_students(self, sec: str, include_left: bool = False) -> list:
         rows = [
             r for r in self.records.values()
-            if r.get("section") == sec and (include_left or r.get("status", "active") == "active")
+            if (r.get("section") == sec or sec in (r.get("extra_sections") or []))
+            and (include_left or r.get("status", "active") == "active")
         ]
         return sorted(rows, key=lambda r: r.get("student_id", ""))
 
     def course_students(self, course: str, include_left: bool = False) -> list:
-        out = []
+        out, seen = [], set()
         for sec in self.settings.course_sections(course):
-            out.extend(self.section_students(sec, include_left))
+            for r in self.section_students(sec, include_left):
+                if r.get("discord_id") not in seen:  # a student can be in 2 sections (extra_sections)
+                    seen.add(r.get("discord_id"))
+                    out.append(r)
         return out
 
     def search(self, query: str) -> list:
