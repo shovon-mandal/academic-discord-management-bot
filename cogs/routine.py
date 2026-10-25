@@ -247,27 +247,38 @@ class Routine(commands.Cog):
             raise commands.BadArgument(
                 "Could not download the routine sheet. In Google Sheets click **Share → General access → "
                 "Anyone with the link (Viewer)**, then try again.")
-        from openpyxl import load_workbook
-        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-        sheets = {}
-        for name in self.sheet_names:
-            if name in wb.sheetnames:
-                sheets[name] = [list(r) for r in wb[name].iter_rows(values_only=True)]
-        if self.titles_sheet in wb.sheetnames:
-            self.titles = parse_titles([list(r) for r in wb[self.titles_sheet].iter_rows(values_only=True)])
-            self.state.setdefault("_meta", {})["titles"] = self.titles
+        def _parse():  # heavy on the Tinker Board → run outside the event loop so buttons stay responsive
+            from openpyxl import load_workbook
+            wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+            out, titles = {}, None
+            for name in self.sheet_names:
+                if name in wb.sheetnames:
+                    out[name] = [list(r) for r in wb[name].iter_rows(values_only=True)]
+            if self.titles_sheet in wb.sheetnames:
+                titles = parse_titles([list(r) for r in wb[self.titles_sheet].iter_rows(values_only=True)])
+            return out, titles, list(wb.sheetnames)
+
+        import asyncio
+        sheets, titles, names = await asyncio.to_thread(_parse)
+        if titles:
+            self.titles = titles
+            self.state.setdefault("_meta", {})["titles"] = titles
         if not sheets:
-            raise commands.BadArgument(f"Sheets {self.sheet_names} not found. Available: {', '.join(wb.sheetnames)}")
+            raise commands.BadArgument(f"Sheets {self.sheet_names} not found. Available: {', '.join(names)}")
         return sheets
 
     async def build(self):
         """→ ({section: [all classes of the section]}, effective_date)"""
         sheets = await self.fetch_rows()
-        entries, effective = [], ""
-        for name, rows in sheets.items():
-            entries += parse_grid(rows, name)
-            effective = effective or find_effective_date(rows)
-        return section_routines(entries, self.s, "", "all"), effective
+        import asyncio
+
+        def _grid():
+            entries, effective = [], ""
+            for name, rows in sheets.items():
+                entries += parse_grid(rows, name)
+                effective = effective or find_effective_date(rows)
+            return section_routines(entries, self.s, "", "all"), effective
+        return await asyncio.to_thread(_grid)
 
     def mine(self, items: list) -> list:
         codes = {info["code"].upper() for info in self.s.courses.values()}
