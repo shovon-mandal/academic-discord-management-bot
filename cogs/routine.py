@@ -690,43 +690,73 @@ class Routine(commands.Cog):
         out.sort(key=lambda e: (_time_key(e["time"]), e["section"]))
         return out
 
+    # ---- coloured tables for the teacher (admin) views
+    def _ansi_grid(self, rows: list, cols: list, group_day: bool = True) -> str:
+        """cols: [(header, width, key)] — key in day/time/section/room/course/teacher/name."""
+        R = "\u001b[0m"
+        colour = {"day": "1;34", "time": "0;37", "section": "1;35", "course": "1;33", "teacher": "0;30", "name": "0;30"}
+        out = ["\u001b[1;37m" + " ".join(f"{h:<{w}}" for h, w, _ in cols).rstrip() + R,
+               "\u001b[0;30m" + "─" * (sum(w for _, w, _ in cols) + len(cols) - 1) + R]
+        prev = None
+        for x in rows:
+            if group_day and prev is not None and x["day"] != prev:
+                out.append("")
+            cells = []
+            for _h, w, key in cols:
+                if key == "day":
+                    val = x["day"][:3] if x["day"] != prev else ""
+                elif key == "time":
+                    val = self._short_time(x["time"])
+                elif key == "name":
+                    val = self._course_name(x["course"], True)
+                else:
+                    val = str(x.get(key, "") or "")
+                val = val[:w]
+                c = colour.get(key, "0;37")
+                if key == "room" and "LAB" in val.upper():
+                    c = "0;32"
+                cells.append(f"\u001b[{c}m{val:<{w}}{R}")
+            prev = x["day"]
+            out.append(" ".join(cells))
+        return "```ansi\n" + "\n".join(out) + "\n```"
+
+    def _course_legend(self, items) -> str:
+        codes = sorted({it["course"] for it in items})
+        return " · ".join(f"**{c}** {self._course_name(c, True)}" for c in codes)
+
     def day_embed(self, day: str, label: str) -> discord.Embed:
         items = self.my_classes(day)
-        ours = {info["code"].upper(): info for info in self.s.courses.values()}
         from datetime import timedelta
         offset = next((i for i in range(7) if (self.s.now() + timedelta(days=i)).strftime("%A") == day), 0)
         pretty = (self.s.now() + timedelta(days=offset)).strftime("%A, %d %B %Y")
-        e = discord.Embed(title=f"📅 {label} — classes, deadlines & tests", description=f"🗓️ **{pretty}**\n",
+        e = discord.Embed(title=f"📅 {label} — my classes, deadlines & tests", description=f"🗓️ **{pretty}**\n",
                           color=discord.Color.gold(), timestamp=self.s.now())
         if not items:
             e.description += "\n🎉 No classes."
             self.add_event_fields(e, None, offset, show_sections=True)
             return e
-        lines = []
-        for it in items:
-            info = ours.get(it["course"], {})
-            lab = " 🧪" if info.get("type") == "lab" else ""
-            eve = " (Evening)" if self.s.is_evening(it["section"]) else ""
-            lines.append(f"🕘 **{it['time']}**\n"
-                         f"   **{it['course']}** {info.get('short', '')}{lab} · Section **{it['section']}**{eve} · 🏫 Room **{it['room']}**")
-        e.description = (e.description + "\n" + "\n".join(lines))[:4000]
+        e.description += self._ansi_grid(items, [("Time", 15, "time"), ("Sec", 4, "section"), ("Room", 11, "room"),
+                                                ("Course", 9, "course")], group_day=False)
+        e.description += "\n" + self._course_legend(items)
         self.add_event_fields(e, None, offset, show_sections=True)
         e.set_footer(text=f"{len(items)} class(es) · from the official routine")
         return e
 
     def week_embed(self) -> discord.Embed:
         e = discord.Embed(title="📆 My weekly routine", color=discord.Color.gold(), timestamp=self.s.now())
-        ours = {info["code"].upper(): info for info in self.s.courses.values()}
-        total = 0
+        rows = []
         for day in DAYS:
-            items = self.my_classes(day)
-            if not items:
-                continue
-            total += len(items)
-            e.add_field(name=f"📅 {day}", inline=False, value="\n".join(
-                f"`{it['time']}` **{it['course']}** {ours.get(it['course'], {}).get('short', '')} · "
-                f"{it['section']} · 🏫 {it['room']}" for it in items)[:1024])
-        e.description = f"{total} classes per week" if total else "No classes found."
+            rows += self.my_classes(day)
+        if not rows:
+            e.description = "No classes found."
+            return e
+        per = {d: sum(1 for r in rows if r["day"] == d) for d in DAYS}
+        e.description = (f"**{len(rows)} classes per week** · "
+                         + " · ".join(f"{d[:3]} {n}" for d, n in per.items() if n) + "\n"
+                         + self._ansi_grid(rows, [("Day", 4, "day"), ("Time", 15, "time"), ("Sec", 4, "section"),
+                                                  ("Room", 11, "room"), ("Course", 9, "course")])
+                         + "\n" + self._course_legend(rows))[:4096]
+        e.set_footer(text="Green room = lab · from the official routine")
         return e
 
     async def _ensure_state(self):
