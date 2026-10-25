@@ -6,6 +6,7 @@ Run:  python bot.py          (PC)
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from logging.handlers import RotatingFileHandler
 
@@ -207,7 +208,8 @@ def main() -> None:
         sys.exit(CONFIG_ERROR_EXIT_CODE)
     if bot.restart_requested:
         log.info("Restart requested — exiting with code %s", RESTART_EXIT_CODE)
-        sys.exit(RESTART_EXIT_CODE)
+        logging.shutdown()
+        os._exit(RESTART_EXIT_CODE)  # hard exit: never wait for leftover threads
 
 
 if __name__ == "__main__":

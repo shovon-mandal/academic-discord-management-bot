@@ -84,6 +84,17 @@ class Maintenance(commands.Cog):
     async def _restart_now(self, reason: str):
         await self.bot.send_log("♻️ Restarting", reason, discord.Color.orange())
         self.bot.restart_requested = True
+        # Safety net: if shutting down hangs (stuck thread / network), force-exit so systemd restarts us.
+        import os
+        import threading
+
+        def _force():
+            logging.getLogger("nubtk").warning("Shutdown took too long — forcing exit")
+            logging.shutdown()
+            os._exit(42)
+        t = threading.Timer(25, _force)
+        t.daemon = True
+        t.start()
         await self.bot.close()
 
     # ------------------------------------------------------------ commands
