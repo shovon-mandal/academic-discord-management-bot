@@ -382,26 +382,26 @@ class Routine(commands.Cog):
         R, B = "\u001b[0m", "\u001b[1;"
         blue, cyan, green, yellow, gray, white = "34m", "36m", "32m", "33m", "30m", "37m"
         t = (self.teacher or "").upper()
-        head = f"{B}{white}  {'Day':<4} {'Time':<15} {'Room':<11} {'Course':<10}" + ("" if mine_view else "Fac") + R
-        out, prev = [head, f"\u001b[0;30m{'─' * (46 if mine_view else 50)}{R}"], None
+        head = f"{B}{white}  {'Day':<4} {'Time':<15} {'Room':<13} {'Course':<10}" + ("" if mine_view else "Fac") + R
+        out, prev = [head, f"\u001b[0;30m{'─' * (48 if mine_view else 52)}{R}"], None
         for x in rows:
             if x["day"] != prev and prev is not None:
                 out.append("")
             day = x["day"][:3] if x["day"] != prev else ""
             prev = x["day"]
             ours = (not mine_view) and t and x["teacher"] == t
-            star = f"{B}{yellow}★{R}" if ours else " "
-            room = str(x["room"] or "—")[:11]
+            star = f"{B}{yellow}*{R}" if ours else " "
+            room = str(x["room"] or "—")[:13]
             rc = green if "LAB" in room.upper() else white
             cc = yellow if ours or mine_view else cyan
             line = (f"{star} {B}{blue}{day:<4}{R} \u001b[0;{white}{self._short_time(x['time']):<15}{R} "
-                    f"\u001b[0;{rc}{room:<11}{R} {B}{cc}{x['course']:<10}{R}")
+                    f"\u001b[0;{rc}{room:<13}{R} {B}{cc}{x['course']:<10}{R}")
             if not mine_view:
-                line += f"\u001b[{'1;' + yellow if ours else '0;' + gray}{x['teacher']}{R}"
+                line += f"\u001b[{'1;' + yellow if ours else '0;' + white}{x['teacher']}{R}"
             else:
                 name = self._course_name(x["course"], True)
                 if name:
-                    line += f"\u001b[0;{gray}{name[:18]}{R}"
+                    line += f"\u001b[0;{white}{name[:18]}{R}"
             out.append(line)
         return "```ansi\n" + "\n".join(out) + "\n```"
 
@@ -440,11 +440,12 @@ class Routine(commands.Cog):
             except Exception as ex:  # noqa: BLE001
                 log.warning("Routine image failed: %s", ex)
         if not files:  # coloured text table (no Pillow)
-            e.description += "\n\n**📚 Full routine**\n" + self._ansi_table(rows)
-        e.set_footer(text="★ = class with " + (self.teacher or "me") + " · this pinned message is always the latest")
+            e.description += (f"\n\n**📚 Full routine**\n🟨 **`*` + yellow = class with {self.teacher}** "
+                              f"({s.raw.get('instructor', {}).get('name', '')}) · 🟩 green room = lab\n" + self._ansi_table(rows))
+        e.set_footer(text="* (yellow) = class with " + (self.teacher or "me") + " · this pinned message is always the latest")
         return [e], files
 
-    VIEW_VERSION = 7  # bump when the buttons under the pinned routine change → auto re-post
+    VIEW_VERSION = 8  # bump when the buttons under the pinned routine change → auto re-post
 
     def _link_view(self):
         """Under the pinned routine: students' 📅 buttons + 📄 sheet link (teacher updates from the admin panel)."""
@@ -568,11 +569,11 @@ class Routine(commands.Cog):
         if not items:
             e.description += "\n🎉 No classes."
         else:
-            e.description += self._ansi_grid(items, [("Time", 15, "time"), ("Room", 11, "room"), ("Course", 9, "course"),
+            e.description += self._ansi_grid(items, [("Time", 15, "time"), ("Room", 13, "room"), ("Course", 9, "course"),
                                                     ("Fac", 5, "teacher")], group_day=False)
             e.description += "\n" + self._course_legend(items)
         self.add_event_fields(e, sec, offset)
-        e.set_footer(text="Only you can see this · from the official routine")
+        e.set_footer(text=f"Yellow {self.teacher} = class with {self.teacher} · green room = lab · only you can see this")
         return e
 
     def _section_of_channel(self, channel_id: int):
@@ -689,7 +690,7 @@ class Routine(commands.Cog):
     def _ansi_grid(self, rows: list, cols: list, group_day: bool = True) -> str:
         """cols: [(header, width, key)] — key in day/time/section/room/course/teacher/name."""
         R = "\u001b[0m"
-        colour = {"day": "1;34", "time": "0;37", "section": "1;35", "course": "1;33", "teacher": "0;30", "name": "0;30"}
+        colour = {"day": "1;34", "time": "0;37", "section": "1;35", "course": "1;33", "teacher": "0;37", "name": "0;37"}
         out = ["\u001b[1;37m" + " ".join(f"{h:<{w}}" for h, w, _ in cols).rstrip() + R,
                "\u001b[0;30m" + "─" * (sum(w for _, w, _ in cols) + len(cols) - 1) + R]
         prev = None
@@ -733,7 +734,7 @@ class Routine(commands.Cog):
             e.description += "\n🎉 No classes."
             self.add_event_fields(e, None, offset, show_sections=True)
             return e
-        e.description += self._ansi_grid(items, [("Time", 15, "time"), ("Sec", 4, "section"), ("Room", 11, "room"),
+        e.description += self._ansi_grid(items, [("Time", 15, "time"), ("Sec", 4, "section"), ("Room", 13, "room"),
                                                 ("Course", 9, "course")], group_day=False)
         e.description += "\n" + self._course_legend(items)
         self.add_event_fields(e, None, offset, show_sections=True)
@@ -752,7 +753,7 @@ class Routine(commands.Cog):
         e.description = (f"**{len(rows)} classes per week** · "
                          + " · ".join(f"{d[:3]} {n}" for d, n in per.items() if n) + "\n"
                          + self._ansi_grid(rows, [("Day", 4, "day"), ("Time", 15, "time"), ("Sec", 4, "section"),
-                                                  ("Room", 11, "room"), ("Course", 9, "course")])
+                                                  ("Room", 13, "room"), ("Course", 9, "course")])
                          + "\n" + self._course_legend(rows))[:4096]
         e.set_footer(text="Green room = lab · from the official routine")
         return e
@@ -862,7 +863,7 @@ class Routine(commands.Cog):
                 mine = self.mine(items)
                 e = discord.Embed(title=f"👨‍🏫 Section {x} — classes with {self.teacher}", color=discord.Color.gold(),
                                   description=(self._ansi_grid(mine, [("Day", 4, "day"), ("Time", 15, "time"),
-                                                                      ("Room", 11, "room"), ("Course", 9, "course")])
+                                                                      ("Room", 13, "room"), ("Course", 9, "course")])
                                                + "\n" + self._course_legend(mine)) if mine else "No classes.")
                 await ctx.send(embed=e)
             else:
