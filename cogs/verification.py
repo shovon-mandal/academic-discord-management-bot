@@ -6,6 +6,7 @@ After verification the member gets:  Sec-XX role (section category + course grou
 from __future__ import annotations
 
 import asyncio
+import re
 import logging
 from collections import defaultdict
 from itertools import cycle
@@ -471,28 +472,68 @@ class Verification(commands.Cog):
                 content=f"✅ Request sent: **{sec}**. You'll get a DM when the teacher approves it.", view=None)
 
     # ---------------------------------------------------------- ID channel (typed messages)
+    @staticmethod
+    def _msg_text(m: discord.Message) -> str:
+        text = m.content or ""
+        for e in m.embeds:
+            text += " ".join(filter(None, [e.title, e.description] + [f.value for f in e.fields]))
+        return text
+
+    def _join_channels(self):
+        return [c for c in (self.bot.channel_for("welcome_channel"), self.bot.channel_for("id_channel")) if c]
+
     async def cleanup_id_channel(self, guild, member):
-        ch = self.bot.channel_for("id_channel")
-        if not ch:
-            return 0
+        """Remove a member's own messages + the bot's messages about them from #welcome and #id-name-section
+        (pinned instructions are never touched). Called after verification and when someone leaves."""
         mentions = (f"<@{member.id}>", f"<@!{member.id}>")
 
         def check(m: discord.Message):
+            if m.pinned:
+                return False
             if m.author.id == member.id:
                 return True
-            if m.author.id != self.bot.user.id or m.pinned:
-                return False
-            text = m.content or ""
-            for e in m.embeds:
-                text += " ".join(filter(None, [e.title, e.description] + [f.value for f in e.fields]))
-            return any(x in text for x in mentions)
+            return m.author.id == self.bot.user.id and any(x in self._msg_text(m) for x in mentions)
 
-        try:
-            deleted = await ch.purge(limit=300, check=check)
-            return len(deleted)
-        except discord.HTTPException as e:
-            log.warning("purge failed: %s", e)
+        total = 0
+        for ch in self._join_channels():
+            try:
+                total += len(await ch.purge(limit=300, check=check))
+            except discord.HTTPException as e:
+                log.warning("purge failed in %s: %s", ch, e)
+        return total
+
+    async def sweep_join_channels(self) -> int:
+        """Clean #welcome and #id-name-section: delete messages of / about people who are already verified
+        or have left. Messages of students still waiting stay. Pinned messages are never touched."""
+        g = self.bot.main_guild()
+        if not g:
             return 0
+        mention_re = re.compile(r"<@!?(\d+)>")
+
+        def done(uid: int) -> bool:
+            m = g.get_member(uid)
+            return m is None or self.is_verified(m)
+
+        def check(m: discord.Message):
+            if m.pinned or m.type == discord.MessageType.pins_add:
+                return m.type == discord.MessageType.pins_add
+            if m.author.id == self.bot.user.id:
+                ids = [int(x) for x in mention_re.findall(self._msg_text(m))]
+                return bool(ids) and all(done(x) for x in ids)
+            if m.author.bot:
+                return False
+            mem = g.get_member(m.author.id)
+            if mem is not None and self.bot.is_admin(mem):
+                return False
+            return done(m.author.id)
+
+        total = 0
+        for ch in self._join_channels():
+            try:
+                total += len(await ch.purge(limit=1000, check=check))
+            except discord.HTTPException as e:
+                log.warning("sweep failed in %s: %s", ch, e)
+        return total
 
     async def process_id_message(self, message: discord.Message, is_edit=False) -> bool:
         if message.author.bot or not self._main(message.guild):
@@ -605,6 +646,9 @@ class Verification(commands.Cog):
                 await self.post_welcome_messages(g)
                 await self.bot.send_log("📌 Welcome messages re-posted", "New version / config.json was updated.")
         v, e = await self.scan_id_channel(reply_errors=False)
+        n = await self.sweep_join_channels()
+        if n:
+            log.info("Join channels cleaned: %s old message(s) removed", n)
         if v or e:
             await self.bot.send_log("🕒 Offline messages processed", f"Verified: **{v}** · Not valid yet: **{e}**")
 
@@ -671,6 +715,7 @@ class Verification(commands.Cog):
             self.bot.pending.pop(p[0])
         desc = f"`{member.name}`" + (f" · {rec['section']} · `{rec['student_id']}` {rec['name']}" if rec else " (not verified)")
         await self.bot.send_log("🚪 Member left", desc, ORANGE)
+        await self.cleanup_id_channel(member.guild, member)
 
     # ---------------------------------------------------------- welcome / instructions posts
     def welcome_embed(self, guild) -> discord.Embed:

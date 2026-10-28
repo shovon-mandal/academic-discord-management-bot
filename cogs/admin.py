@@ -35,6 +35,7 @@ HELP = [
         ("unverify @user", "Remove access + record", "!unverify @rahim"),
         ("move @user <sec>", "Change section", "!move @rahim 3F"),
         ("rename @user <name>", "Fix name / nickname", "!rename @rahim Md Rahim Uddin"),
+        ("clean_welcome", "Remove old messages of verified/left students from welcome + ID channels", "!clean_welcome"),
         ("add_section @user <sec…>", "Give access to an EXTRA section (student in 3D and 4B)", "!add_section @rahim 4B"),
         ("remove_section @user <sec…>", "Remove an extra section", "!remove_section @rahim 4B"),
         ("pending", "Requests waiting for approval", "!pending"),
@@ -260,6 +261,12 @@ class Admin(commands.Cog):
         ok, text = await self.ver.apply_verification(ctx.guild, member, sec, rec["student_id"], rec["name"],
                                                      by=f"admin-move:{ctx.author.name}")
         await ctx.send(("✅ Moved. " if ok else "❌ ") + text)
+
+    @commands.command(name="clean_welcome")
+    async def clean_welcome(self, ctx):
+        n = await self.ver.sweep_join_channels()
+        await ctx.send(f"🧹 Cleaned #welcome and #id-name-section: **{n}** old message(s) removed "
+                       "(verified / left students). Pinned instructions were kept.")
 
     @commands.command(name="add_section")
     async def add_section(self, ctx, member: discord.Member, *sections: str):

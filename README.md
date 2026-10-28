@@ -227,6 +227,7 @@ Commands work only in `🛠️┃admin` or `📜┃bot-logs`, and only for the t
 | `!rename @user <name>` | Fix name / nickname | `!rename @rahim Md Rahim Uddin` |
 | `!add_section @user <sec…>` | Give an extra section (student in 3D **and** 4B) — only the teacher can give it | `!add_section @rahim 4B` |
 | `!remove_section @user <sec…>` | Remove an extra section | `!remove_section @rahim 4B` |
+| `!clean_welcome` | Remove old messages of verified / left students from #welcome and #id-name-section (also automatic) | `!clean_welcome` |
 | `!pending` | Requests waiting for approval | `!pending` |
 | `!notify_unverified` | Remind unverified members | `!notify_unverified` |
 | `!kick_unverified <days> [confirm]` | List / kick never-verified | `!kick_unverified 7  →  !kick_unverified 7 confirm` |
