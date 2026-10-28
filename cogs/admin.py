@@ -35,7 +35,7 @@ HELP = [
         ("unverify @user", "Remove access + record", "!unverify @rahim"),
         ("move @user <sec>", "Change section", "!move @rahim 3F"),
         ("rename @user <name>", "Fix name / nickname", "!rename @rahim Md Rahim Uddin"),
-        ("clean_welcome", "Remove old messages of verified/left students from welcome + ID channels", "!clean_welcome"),
+        ("clean_welcome [all]", "Clean welcome + ID channels: verified/left students (auto) · `all` = also students still waiting", "!clean_welcome all"),
         ("add_section @user <sec…>", "Give access to an EXTRA section (student in 3D and 4B)", "!add_section @rahim 4B"),
         ("remove_section @user <sec…>", "Remove an extra section", "!remove_section @rahim 4B"),
         ("pending", "Requests waiting for approval", "!pending"),
@@ -263,10 +263,12 @@ class Admin(commands.Cog):
         await ctx.send(("✅ Moved. " if ok else "❌ ") + text)
 
     @commands.command(name="clean_welcome")
-    async def clean_welcome(self, ctx):
-        n = await self.ver.sweep_join_channels()
-        await ctx.send(f"🧹 Cleaned #welcome and #id-name-section: **{n}** old message(s) removed "
-                       "(verified / left students). Pinned instructions were kept.")
+    async def clean_welcome(self, ctx, mode: str = ""):
+        everything = mode.lower() in ("all", "everything")
+        n = await self.ver.sweep_join_channels(everything=everything)
+        who = "all students' messages" if everything else "verified / left students"
+        await ctx.send(f"🧹 Cleaned #welcome and #id-name-section: **{n}** message(s) removed ({who}). "
+                       "Pinned instructions were kept.")
 
     @commands.command(name="add_section")
     async def add_section(self, ctx, member: discord.Member, *sections: str):

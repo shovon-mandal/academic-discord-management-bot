@@ -502,15 +502,18 @@ class Verification(commands.Cog):
                 log.warning("purge failed in %s: %s", ch, e)
         return total
 
-    async def sweep_join_channels(self) -> int:
+    async def sweep_join_channels(self, everything: bool = False) -> int:
         """Clean #welcome and #id-name-section: delete messages of / about people who are already verified
-        or have left. Messages of students still waiting stay. Pinned messages are never touched."""
+        or have left (everything=True: also those still waiting). Pinned messages are never touched;
+        the teacher's own messages stay."""
         g = self.bot.main_guild()
         if not g:
             return 0
         mention_re = re.compile(r"<@!?(\d+)>")
 
         def done(uid: int) -> bool:
+            if everything:
+                return True
             m = g.get_member(uid)
             return m is None or self.is_verified(m)
 
@@ -714,6 +717,13 @@ class Verification(commands.Cog):
 
         wc = self.bot.channel_for("welcome_channel")
         idc = self.bot.channel_for("id_channel")
+        if wc:
+            try:
+                await wc.send(f"👋 Welcome {member.mention}! Click your **section button** above ☝️ "
+                              "and fill the form (Student ID + full name) to unlock your class channels.",
+                              delete_after=self.s.welcome_ping_delete_after or None)
+            except discord.HTTPException:
+                pass
         try:
             await member.send(embed=discord.Embed(
                 title=f"👋 Welcome to {member.guild.name}!",

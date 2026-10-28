@@ -22,7 +22,7 @@
   "duplicate_id_policy": "admin_approval",
   "roster_check": false,
   "lock_nickname_change": true,
-  "welcome_ping_delete_after_minutes": 30,
+  "welcome_ping_delete_after_minutes": 0,
   "id_channel_slowmode_seconds": 5,
   "course_group_categories": true,
 

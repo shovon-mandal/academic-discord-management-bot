@@ -117,6 +117,23 @@ class BaseMenu(discord.ui.View):
         return True
 
 
+class CleanWelcomeMenu(BaseMenu):
+    def __init__(self, cog, user_id):
+        super().__init__(cog, user_id, 300)
+        a = discord.ui.Button(label="Verified / left only", emoji="✅", style=discord.ButtonStyle.secondary)
+        b = discord.ui.Button(label="Everything", emoji="🧹", style=discord.ButtonStyle.danger)
+        a.callback = lambda i: self._go(i, "")
+        b.callback = lambda i: self._go(i, "all")
+        self.add_item(a)
+        self.add_item(b)
+
+    async def _go(self, interaction, mode):
+        self.stop()
+        await interaction.response.edit_message(content="⏳ Cleaning...", view=None)
+        await run_command(interaction, "clean_welcome", mode)
+        await done(interaction)
+
+
 class ConfirmView(BaseMenu):
     def __init__(self, cog, user_id, on_confirm, label="Yes, continue", danger=True, timeout=120):
         super().__init__(cog, user_id, timeout)
@@ -717,6 +734,7 @@ PANEL_GROUPS = [
         ("find", "Find", "🔎", B.secondary, "Search by ID, name or Discord name."),
         ("pending", "Pending", "🟡", B.secondary, "Requests waiting for Approve / Reject."),
         ("notify", "Remind unverified", "🔔", B.secondary, "DM + mention everyone not verified yet."),
+        ("clean_welcome", "Clean welcome", "🧹", B.danger, "Remove messages in #welcome and #id-name-section (pinned stay)."),
     ]),
     ("Row 4 · 👤 Manage members", discord.Color.orange(), [
         ("verify", "Verify", "✅", B.success, "Member + section → ID and name → verified."),
@@ -898,6 +916,12 @@ class Panel(commands.Cog):
 
         if key == "panel":
             await self.send_panel_private(interaction)
+            return
+        if key == "clean_welcome":
+            await menu(CleanWelcomeMenu(self, uid),
+                       "🧹 **Clean #welcome and #id-name-section** (pinned instructions always stay)\n"
+                       "• **Verified / left only** — happens automatically too\n"
+                       "• **Everything** — also messages of students who are still waiting")
             return
         if key == "allcmds":
             admin = self.bot.get_cog("Admin")
