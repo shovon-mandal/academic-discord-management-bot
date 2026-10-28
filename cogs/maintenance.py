@@ -172,11 +172,11 @@ class Maintenance(commands.Cog):
             await report(f"❌ New config.json is invalid — NOT restarting:\n`{e}`")
             return
         if "config.json" in changed:
-            # after restart, re-post welcome + instructor cards automatically
+            # after restart, update the welcome + instructor cards in place (silent)
             (DATA_DIR / ".repost_welcome").parent.mkdir(parents=True, exist_ok=True)
             (DATA_DIR / ".repost_welcome").write_text("1")
-            notes.append("config.json changed → welcome messages will be re-posted automatically. "
-                         "If you changed channels/sections, run `!setup_server`.")
+            notes.append("config.json changed → the pinned welcome/instructor cards are updated in place "
+                         "(no new posts). If you changed channels/sections, run `!setup_server`.")
         last = await report(f"✅ Updated:\n```{out[-1200:]}```\nChanged: `{' '.join(changed.split())[:500]}`\n"
                             + "\n".join(notes) + "\n♻️ Restarting...")
         await self._restart(f"Update by {who}: {git_commit()}", last)

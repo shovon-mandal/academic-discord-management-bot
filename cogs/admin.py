@@ -23,7 +23,7 @@ HELP = [
     ("🏗️ Setup", [
         ("panel", "Re-post the button control panel", "!panel"),
         ("setup_server", "Create / sync all channels & roles (asks to confirm)", "!setup_server"),
-        ("setup_welcome", "Re-post welcome buttons + instructor cards", "!setup_welcome"),
+        ("setup_welcome", "Post the welcome buttons + instructor cards AGAIN in every channel (only when you want; text/link changes update silently)", "!setup_welcome"),
         ("invite", "Invite link + join guide for students", "!invite"),
         ("reset_server", "⚠️ Delete EVERYTHING, build fresh (asks to confirm)", "!reset_server"),
     ]),

@@ -671,8 +671,7 @@ class Verification(commands.Cog):
                 pass
             g = self.bot.main_guild()
             if g:
-                await self.post_welcome_messages(g)
-                await self.bot.send_log("📌 Welcome messages re-posted", "New version / config.json was updated.")
+                await self.post_welcome_messages(g)  # silent: edits the existing cards only if their text changed
         v, e = await self.scan_id_channel(reply_errors=False)
         n = await self.sweep_join_channels()
         if n:
@@ -786,7 +785,35 @@ class Verification(commands.Cog):
                          "The answer comes in your **DM**."),
             color=GOLD)
 
-    async def _post_pinned(self, channel, only_pinned=False, **kwargs):
+    @staticmethod
+    def _same_embed(a: discord.Embed, b: discord.Embed) -> bool:
+        def key(e):
+            d = e.to_dict()
+            return (d.get("title"), d.get("description"), [(f.get("name"), f.get("value")) for f in d.get("fields", [])],
+                    (d.get("footer") or {}).get("text"), (d.get("image") or {}).get("url"))
+        return key(a) == key(b)
+
+    async def _post_pinned(self, channel, only_pinned=False, force=False, **kwargs):
+        """Keep ONE pinned bot card in the channel.
+        force=False (automatic): edit the existing card in place — no new post, no notification;
+                                 nothing happens if the text is the same.
+        force=True (!setup_welcome): delete and post again."""
+        if not force:
+            try:
+                pins = [m for m in await channel.pins() if m.author.id == self.bot.user.id]
+            except discord.HTTPException:
+                pins = []
+            if pins:
+                msg = pins[0]
+                new = kwargs.get("embed")
+                if new is not None and msg.embeds and self._same_embed(msg.embeds[0], new):
+                    return msg
+                try:
+                    await msg.edit(**kwargs)
+                    return msg
+                except discord.HTTPException as e:
+                    log.warning("Could not edit card in %s: %s", channel, e)
+                    return msg
         try:
             async for m in channel.history(limit=50):
                 if m.author.id == self.bot.user.id and (m.pinned or not only_pinned):
@@ -807,18 +834,21 @@ class Verification(commands.Cog):
             log.warning("Could not post in %s: %s", channel, e)
             return None
 
-    async def post_welcome_messages(self, guild):
+    async def post_welcome_messages(self, guild, force: bool = False):
+        """force=False: update the existing cards silently (only if something changed).
+        force=True: post everything again (only when the teacher asks: !setup_welcome)."""
         wc = self.bot.channel_for("welcome_channel")
         idc = self.bot.channel_for("id_channel")
         adm = self.bot.channel_for("admin_channel")
         if wc:
-            await self._post_pinned(wc, embed=self.welcome_embed(guild), view=SectionView(self.s))
+            await self._post_pinned(wc, only_pinned=True, force=force, embed=self.welcome_embed(guild),
+                                    view=SectionView(self.s))
         if idc:
-            await self._post_pinned(idc, only_pinned=True, embed=self.id_embed(), view=SectionView(self.s))
+            await self._post_pinned(idc, only_pinned=True, force=force, embed=self.id_embed(), view=SectionView(self.s))
         panel = self.bot.get_cog("Panel")
-        if adm and panel:
+        if force and adm and panel:
             await panel.post_panel(adm)
-        await self.post_section_welcomes(guild)
+        await self.post_section_welcomes(guild, force=force)
 
     # ---- instructor card (shown in every announcement channel) ----
     DETAIL_KEYS = ("name", "initial", "designation", "department")
@@ -907,21 +937,21 @@ class Verification(commands.Cog):
         e.set_footer(text=s.semester)
         return e
 
-    async def post_section_welcomes(self, guild):
+    async def post_section_welcomes(self, guild, force: bool = False):
         url = await self.bot.get_invite_url()
         for sec in self.s.sections:
             ch = self.bot.channel_for(f"sec:{sec}:announcement")
             if ch:
-                msg = await self._post_pinned(ch, only_pinned=True, embed=self.section_welcome_embed(sec, url))
+                msg = await self._post_pinned(ch, only_pinned=True, force=force, embed=self.section_welcome_embed(sec, url))
                 if msg:
                     self.bot.ids.set(f"sec:{sec}:welcome_msg", msg.id)
         for theory, group in self.s.course_groups().items():
             ch = self.bot.channel_for(f"group:{theory}:announcement")
             if ch:
-                await self._post_pinned(ch, only_pinned=True, embed=self.group_welcome_embed(theory, group, url))
+                await self._post_pinned(ch, only_pinned=True, force=force, embed=self.group_welcome_embed(theory, group, url))
         ch = self.bot.channel_for("all:notice")
         if ch:
-            await self._post_pinned(ch, only_pinned=True, embed=self.all_welcome_embed(url))
+            await self._post_pinned(ch, only_pinned=True, force=force, embed=self.all_welcome_embed(url))
 
     def section_link_url(self, sec: str) -> str:
         """URL that opens the section's announcement channel at the pinned welcome card."""
@@ -951,7 +981,7 @@ class Verification(commands.Cog):
 
     @commands.command(name="setup_welcome")
     async def setup_welcome(self, ctx):
-        await self.post_welcome_messages(ctx.guild)
+        await self.post_welcome_messages(ctx.guild, force=True)
         await ctx.send("✅ Re-posted: welcome buttons, ID instructions, admin help and the instructor card in every announcement channel.")
 
 
