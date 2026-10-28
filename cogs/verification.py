@@ -16,7 +16,7 @@ from discord.ext import commands
 
 from core.config import DATA_DIR
 from core.parsing import build_nickname, clean_name, parse_verification_text
-from core.storage import append_audit, load_roster
+from core.storage import append_audit, load_json, load_roster, save_json
 
 WELCOME_VERSION = "5"  # bump → welcome/section cards re-post automatically after update
 
@@ -834,21 +834,167 @@ class Verification(commands.Cog):
             log.warning("Could not post in %s: %s", channel, e)
             return None
 
-    async def post_welcome_messages(self, guild, force: bool = False):
-        """force=False: update the existing cards silently (only if something changed).
-        force=True: post everything again (only when the teacher asks: !setup_welcome)."""
-        wc = self.bot.channel_for("welcome_channel")
-        idc = self.bot.channel_for("id_channel")
-        adm = self.bot.channel_for("admin_channel")
+    # ---- the pinned cards: what should be where
+    async def _card_plan(self, guild) -> list:
+        """[(label, channel, ids_key or None, kwargs)] for every pinned card the bot keeps."""
+        plan = []
+        wc, idc = self.bot.channel_for("welcome_channel"), self.bot.channel_for("id_channel")
         if wc:
-            await self._post_pinned(wc, only_pinned=True, force=force, embed=self.welcome_embed(guild),
-                                    view=SectionView(self.s))
+            plan.append(("Welcome channel (join buttons)", wc, None,
+                         {"embed": self.welcome_embed(guild), "view": SectionView(self.s)}))
         if idc:
-            await self._post_pinned(idc, only_pinned=True, force=force, embed=self.id_embed(), view=SectionView(self.s))
-        panel = self.bot.get_cog("Panel")
-        if force and adm and panel:
-            await panel.post_panel(adm)
-        await self.post_section_welcomes(guild, force=force)
+            plan.append(("ID channel (instructions)", idc, None, {"embed": self.id_embed(), "view": SectionView(self.s)}))
+        url = await self.bot.get_invite_url()
+        for sec in self.s.sections:
+            ch = self.bot.channel_for(f"sec:{sec}:announcement")
+            if ch:
+                plan.append((f"Section {sec} announcement (instructor card)", ch, f"sec:{sec}:welcome_msg",
+                             {"embed": self.section_welcome_embed(sec, url)}))
+        for theory, group in self.s.course_groups().items():
+            ch = self.bot.channel_for(f"group:{theory}:announcement")
+            if ch:
+                plan.append((f"{theory} group announcement", ch, None, {"embed": self.group_welcome_embed(theory, group, url)}))
+        ch = self.bot.channel_for("all:notice")
+        if ch:
+            plan.append(("All students notice board", ch, None, {"embed": self.all_welcome_embed(url)}))
+        return plan
+
+    @staticmethod
+    def _embed_lines(e: discord.Embed) -> list:
+        d = e.to_dict()
+        lines = [f"# {d.get('title', '')}"] + (d.get("description") or "").splitlines()
+        for f in d.get("fields", []):
+            lines += [f"[{f.get('name', '')}]"] + (f.get("value") or "").splitlines()
+        if (d.get("footer") or {}).get("text"):
+            lines.append(f"(footer) {d['footer']['text']}")
+        return [x for x in lines if x.strip()]
+
+    @staticmethod
+    def _hash(e: discord.Embed) -> str:
+        import hashlib
+        return hashlib.sha1("\n".join(Verification._embed_lines(e)).encode()).hexdigest()[:16]
+
+    async def _current_card(self, ch):
+        try:
+            pins = [m for m in await ch.pins() if m.author.id == self.bot.user.id and m.embeds]
+        except discord.HTTPException:
+            return None
+        return pins[0] if pins else None
+
+    async def post_welcome_messages(self, guild, force: bool = False):
+        """force=True (!setup_welcome): post every card again.
+        force=False (automatic: update / restart / setup_server): new channels get their card; if an existing
+        card's text changed, the teacher is ASKED in the admin channel (details + buttons) — nothing is posted."""
+        adm = self.bot.channel_for("admin_channel")
+        if force:
+            for label, ch, key, kw in await self._card_plan(guild):
+                msg = await self._post_pinned(ch, only_pinned=True, force=True, **kw)
+                if msg and key:
+                    self.bot.ids.set(key, msg.id)
+            panel = self.bot.get_cog("Panel")
+            if adm and panel:
+                await panel.post_panel(adm)
+            return
+        await self.check_cards(guild)
+
+    async def check_cards(self, guild, report_ctx=None) -> int:
+        """Find cards whose text changed and ask the teacher. Returns how many changed."""
+        import difflib
+        skip = load_json(DATA_DIR / ".card_skip.json", {})
+        changed = []
+        for label, ch, key, kw in await self._card_plan(guild):
+            cur = await self._current_card(ch)
+            if cur is None:  # channel has no card yet (new channel) → post it
+                msg = await self._post_pinned(ch, only_pinned=True, force=True, **kw)
+                if msg and key:
+                    self.bot.ids.set(key, msg.id)
+                continue
+            if key and self.bot.ids.get(key) != cur.id:
+                self.bot.ids.set(key, cur.id)
+            new = kw["embed"]
+            if self._same_embed(cur.embeds[0], new) or skip.get(str(ch.id)) == self._hash(new):
+                continue
+            diff = [ln for ln in difflib.unified_diff(self._embed_lines(cur.embeds[0]), self._embed_lines(new),
+                                                     lineterm="", n=0) if ln[:1] in "+-" and ln[:3] not in ("+++", "---")]
+            changed.append((label, ch, diff))
+        if not changed:
+            if report_ctx:
+                await report_ctx.send("✅ All pinned welcome / instructor cards are up to date.")
+            return 0
+        adm = self.bot.channel_for("admin_channel")
+        if adm is None:
+            return len(changed)
+        e = discord.Embed(title="📝 Pinned cards changed — post them?", color=GOLD,
+                          description=(f"The text of **{len(changed)}** pinned card(s) changed "
+                                       "(config.json / invite link / new version). **Nothing was posted yet.**\n"
+                                       "➖ = old text · ➕ = new text"))
+        for label, ch, diff in changed[:20]:
+            body = "\n".join(diff) or "(only formatting changed)"
+            if len(body) > 900:
+                body = body[:900] + "\n…"
+            e.add_field(name=f"{label} · #{ch.name}"[:256], value=f"```diff\n{body}\n```", inline=False)
+        e.set_footer(text="✏️ Update = edit the old card in place (no notification) · "
+                          "📢 Post again = new message (students get notified) · ❌ Keep old = do nothing")
+        await adm.send(embed=e, view=self.card_decision_view())
+        return len(changed)
+
+    def card_decision_view(self):
+        v = discord.ui.View(timeout=None)
+        v.add_item(discord.ui.Button(label="Update silently", emoji="✏️", style=discord.ButtonStyle.primary,
+                                     custom_id="nubtk:card:edit"))
+        v.add_item(discord.ui.Button(label="Post again (notify)", emoji="📢", style=discord.ButtonStyle.success,
+                                     custom_id="nubtk:card:repost"))
+        v.add_item(discord.ui.Button(label="Keep old", emoji="❌", style=discord.ButtonStyle.secondary,
+                                     custom_id="nubtk:card:skip"))
+        v.stop()
+        return v
+
+    async def apply_card_decision(self, guild, action: str) -> int:
+        skip = load_json(DATA_DIR / ".card_skip.json", {})
+        n = 0
+        for label, ch, key, kw in await self._card_plan(guild):
+            cur = await self._current_card(ch)
+            new = kw["embed"]
+            if cur is not None and self._same_embed(cur.embeds[0], new):
+                continue
+            n += 1
+            if action == "skip":
+                skip[str(ch.id)] = self._hash(new)
+                continue
+            skip.pop(str(ch.id), None)
+            msg = None
+            if action == "edit" and cur is not None:
+                try:
+                    await cur.edit(**kw)
+                    msg = cur
+                except discord.HTTPException as e:
+                    log.warning("card edit failed in %s: %s", ch, e)
+            else:
+                msg = await self._post_pinned(ch, only_pinned=True, force=True, **kw)
+            if msg and key:
+                self.bot.ids.set(key, msg.id)
+        save_json(DATA_DIR / ".card_skip.json", skip)
+        return n
+
+    @commands.Cog.listener("on_interaction")
+    async def _card_interaction(self, interaction: discord.Interaction):
+        if interaction.type != discord.InteractionType.component:
+            return
+        cid = (interaction.data or {}).get("custom_id", "")
+        if not cid.startswith("nubtk:card:"):
+            return
+        if not self.bot.is_admin(interaction.user):
+            await interaction.response.send_message("Only the teacher can use this.", ephemeral=True)
+            return
+        action = cid.split(":")[-1]
+        await interaction.response.defer()
+        n = await self.apply_card_decision(interaction.guild, action)
+        word = {"edit": "✏️ Updated in place (no notification)", "repost": "📢 Posted again",
+                "skip": "❌ Kept the old cards (I won't ask again for this text)"}[action]
+        try:
+            await interaction.message.edit(view=None, content=f"{word} — **{n}** card(s) · by {interaction.user.mention}")
+        except discord.HTTPException:
+            pass
 
     # ---- instructor card (shown in every announcement channel) ----
     DETAIL_KEYS = ("name", "initial", "designation", "department")
@@ -938,20 +1084,7 @@ class Verification(commands.Cog):
         return e
 
     async def post_section_welcomes(self, guild, force: bool = False):
-        url = await self.bot.get_invite_url()
-        for sec in self.s.sections:
-            ch = self.bot.channel_for(f"sec:{sec}:announcement")
-            if ch:
-                msg = await self._post_pinned(ch, only_pinned=True, force=force, embed=self.section_welcome_embed(sec, url))
-                if msg:
-                    self.bot.ids.set(f"sec:{sec}:welcome_msg", msg.id)
-        for theory, group in self.s.course_groups().items():
-            ch = self.bot.channel_for(f"group:{theory}:announcement")
-            if ch:
-                await self._post_pinned(ch, only_pinned=True, force=force, embed=self.group_welcome_embed(theory, group, url))
-        ch = self.bot.channel_for("all:notice")
-        if ch:
-            await self._post_pinned(ch, only_pinned=True, force=force, embed=self.all_welcome_embed(url))
+        await self.post_welcome_messages(guild, force=force)
 
     def section_link_url(self, sec: str) -> str:
         """URL that opens the section's announcement channel at the pinned welcome card."""
@@ -978,6 +1111,10 @@ class Verification(commands.Cog):
         if g and ch and mid:
             return f"https://discord.com/channels/{g.id}/{ch.id}/{mid}"
         return ch.mention if ch else ""
+
+    @commands.command(name="check_welcome")
+    async def check_welcome(self, ctx):
+        await self.check_cards(ctx.guild, report_ctx=ctx)
 
     @commands.command(name="setup_welcome")
     async def setup_welcome(self, ctx):
