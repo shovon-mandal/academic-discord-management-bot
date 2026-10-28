@@ -18,7 +18,7 @@ from core.config import DATA_DIR
 from core.parsing import build_nickname, clean_name, parse_verification_text
 from core.storage import append_audit, load_roster
 
-WELCOME_VERSION = "4"  # bump → welcome/section cards re-post automatically after update
+WELCOME_VERSION = "5"  # bump → welcome/section cards re-post automatically after update
 
 log = logging.getLogger("nubtk.verify")
 
@@ -515,8 +515,8 @@ class Verification(commands.Cog):
             return m is None or self.is_verified(m)
 
         def check(m: discord.Message):
-            if m.pinned or m.type == discord.MessageType.pins_add:
-                return m.type == discord.MessageType.pins_add
+            if m.pinned or m.type in (discord.MessageType.pins_add, discord.MessageType.new_member):
+                return not m.pinned
             if m.author.id == self.bot.user.id:
                 ids = [int(x) for x in mention_re.findall(self._msg_text(m))]
                 return bool(ids) and all(done(x) for x in ids)
@@ -541,11 +541,11 @@ class Verification(commands.Cog):
         member = message.guild.get_member(message.author.id)
         if member is None or self.bot.is_admin(member):
             return False
+        try:  # hide it at once: only the student (DM) and the teacher (log) see what was written
+            await message.delete()
+        except discord.HTTPException:
+            pass
         if self.is_verified(member):
-            try:
-                await message.delete()
-            except discord.HTTPException:
-                pass
             return False
 
         sec, sid, name = parse_verification_text(message.content, list(self.s.sections), self.s.id_length)
@@ -557,32 +557,57 @@ class Verification(commands.Cog):
         elif not name:
             error = "Your **full official name** is missing."
         if error:
-            if not is_edit:
-                await self._reply_error(message, error)
+            await self._reply_error(message, error)
             return False
 
         result = await self.verify_request(message.guild, member, sec, sid, name, source="message")
         if result.status == "verified":
             return True
-        if not is_edit or result.status == "pending":
-            try:
-                await message.reply(embed=result.embed(), mention_author=True)
-            except discord.HTTPException:
-                pass
+        await self._private_reply(message.channel, member, embed=result.embed())
         return False
+
+    _private_results: dict = {}
+
+    async def _private_reply(self, channel, user, embed: discord.Embed):
+        """Answer only this student: DM. If DMs are closed, a short notice with a button that shows the
+        answer only to them (the notice disappears after 3 minutes and contains no personal data)."""
+        try:
+            await user.send(embed=embed)
+            return
+        except discord.HTTPException:
+            pass
+        self._private_results[user.id] = embed
+        v = discord.ui.View(timeout=None)
+        v.add_item(discord.ui.Button(label="See my result (only you)", emoji="🔒", style=discord.ButtonStyle.primary,
+                                     custom_id=f"nubtk:idres:{user.id}"))
+        v.stop()
+        try:
+            await channel.send(f"{user.mention} I couldn't DM you — click the button to see your answer.",
+                               view=v, delete_after=180)
+        except discord.HTTPException:
+            pass
+
+    @commands.Cog.listener("on_interaction")
+    async def _idres_interaction(self, interaction: discord.Interaction):
+        if interaction.type != discord.InteractionType.component:
+            return
+        cid = (interaction.data or {}).get("custom_id", "")
+        if not cid.startswith("nubtk:idres:"):
+            return
+        if str(interaction.user.id) != cid.split(":")[-1]:
+            await interaction.response.send_message("This button is for another student.", ephemeral=True)
+            return
+        emb = self._private_results.get(interaction.user.id)
+        await interaction.response.send_message(embed=emb or discord.Embed(description="Nothing to show any more."),
+                                                ephemeral=True)
 
     async def _reply_error(self, message, error):
         example = f"`{list(self.s.sections)[0]} 11250121964 Your Full Name`"
-        text = (f"{message.author.mention} ⚠️ {error}\n\nCorrect format: {example}\n"
-                "Easiest way: click your section button in the welcome channel.")
-        try:
-            await message.reply(text, mention_author=True)
-        except discord.HTTPException:
-            pass
-        try:
-            await message.author.send(f"⚠️ Verification problem: {error}\nFormat: {example}")
-        except discord.HTTPException:
-            pass
+        emb = discord.Embed(title="⚠️ Verification problem", color=ORANGE,
+                            description=(f"{error}\n\nYou wrote: `{(message.content or '')[:200]}`\n"
+                                         f"Correct format: {example}\n\n"
+                                         "Easiest way: click your **section button** in the welcome channel."))
+        await self._private_reply(message.channel, message.author, embed=emb)
         await self.bot.send_log("⚠️ Verification message problem",
                                 f"{message.author.mention}: {error}\n```{message.content[:800]}```", ORANGE)
 
@@ -599,13 +624,13 @@ class Verification(commands.Cog):
                 member = guild.get_member(m.author.id)
                 if member is None or self.bot.is_admin(member):
                     continue
-                if self.is_verified(member):
+                if self.is_verified(member) or member.id in latest:
                     try:
                         await m.delete()
                     except discord.HTTPException:
                         pass
                     continue
-                latest.setdefault(member.id, m)
+                latest[member.id] = m
         except discord.HTTPException as e:
             log.warning("scan failed: %s", e)
         verified = errors = 0
@@ -654,6 +679,12 @@ class Verification(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
+        if message.type == discord.MessageType.new_member and message.channel.id in {c.id for c in self._join_channels()}:
+            try:
+                await message.delete()
+            except discord.HTTPException:
+                pass
+            return
         ch = self.bot.channel_for("id_channel")
         if ch and message.channel.id == ch.id and not message.content.startswith(self.s.prefix):
             await self.process_id_message(message)
@@ -683,13 +714,6 @@ class Verification(commands.Cog):
 
         wc = self.bot.channel_for("welcome_channel")
         idc = self.bot.channel_for("id_channel")
-        if wc:
-            try:
-                await wc.send(f"👋 Welcome {member.mention}! Click your **section button** above ☝️ "
-                              "and fill the form (Student ID + full name) to unlock your class channels.",
-                              delete_after=self.s.welcome_ping_delete_after or None)
-            except discord.HTTPException:
-                pass
         try:
             await member.send(embed=discord.Embed(
                 title=f"👋 Welcome to {member.guild.name}!",
@@ -748,8 +772,8 @@ class Verification(commands.Cog):
                          "**Student ID** (11 digits) and **full name** → **Submit**. Done! 🎉\n\n"
                          "**Way 2:** send **one message** here with your section, Student ID and full name:\n"
                          f"`{ex} 11250121964 John Doe`\n`John Doe {ex} 11250121964`\n\n"
-                         "Wrong messages stay visible so you can see the error and send again. "
-                         "After verification your messages here are deleted automatically."),
+                         "🔒 Your message is hidden right away — only you (by DM) and the teacher see it. "
+                         "The answer comes in your **DM**."),
             color=GOLD)
 
     async def _post_pinned(self, channel, only_pinned=False, **kwargs):
