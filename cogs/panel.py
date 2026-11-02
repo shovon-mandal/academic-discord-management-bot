@@ -921,12 +921,9 @@ class Panel(commands.Cog):
         if key == "post":
             from cogs.poster import PostMenu
             pc = interaction.client.get_cog("Poster")
-            await menu(PostMenu(pc, uid),
-                       "📤 **Post as bot** — the bot posts your message for you.\n"
-                       "1️⃣ Choose **channel(s)** · 2️⃣ roles to mention (optional) · 3️⃣ mention option · 4️⃣ style\n"
-                       "5️⃣ Click **✍️ Write message / add files** → preview → **✅ Post now**\n"
-                       "🔗 Style **…+ link buttons**: every link in your text becomes a button (link written under it)\n"
-                       "🤖 First time? Click **🤖 Only bot-test** (or choose 🤖┃bot-test; only admins see it) to try.")
+            pm = PostMenu(pc, uid, interaction.guild)
+            await menu(pm, pm.status_text() + "\n🔗 Style **…+ link buttons**: every link becomes a button (link under it)\n"
+                       "🤖 First time? Click **🤖 Only bot-test** (only admins see it) to try.")
             return
         if key == "clean_welcome":
             await menu(CleanWelcomeMenu(self, uid),

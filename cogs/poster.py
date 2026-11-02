@@ -343,33 +343,69 @@ class _Owned(discord.ui.View):
 
 
 class PostMenu(_Owned):
-    """Step 1: where + who + style."""
+    """Step 1: choose ROLE(S) first → then the channels those roles can see → mention + style."""
 
-    def __init__(self, cog, user_id):
+    STYLES = [("plain", "Plain message", "💬", "Exactly as you write it (bold, lists, links …)"),
+              ("plain+btn", "Plain + link buttons", "🔗", "Every link becomes a button, link written under it"),
+              ("card", "Card (box with title)", "🪧", "Coloured box with a title"),
+              ("card+btn", "Card + link buttons", "🧷", "Box + every link becomes a button")]
+
+    def __init__(self, cog, user_id, guild=None):
         super().__init__(cog, user_id)
         self.d = Draft()
-        ch = discord.ui.ChannelSelect(placeholder="📍 Choose channel(s) — many allowed", min_values=1, max_values=25,
-                                      channel_types=[discord.ChannelType.text, discord.ChannelType.news], row=0)
-        ch.callback = self._ch
-        self.add_item(ch)
-        rs = discord.ui.RoleSelect(placeholder="🏷️ Roles to mention (optional, many allowed)", min_values=0,
-                                   max_values=25, row=1)
+        self.d.mention = "roles"
+        self.groups: list = []        # [(channel name, [channel ids])]
+        self.picked: set = set()      # chosen group indexes
+        self.guild = guild
+        self._build()
+
+    def _style_value(self):
+        return self.d.style + ("+btn" if self.d.linkbuttons else "")
+
+    def _compute_groups(self):
+        g = self.guild
+        roles = [r for r in (g.get_role(x) for x in self.d.roles) if r] if g else []
+        found: dict = {}
+        if roles:
+            chans = sorted(g.text_channels, key=lambda c: ((c.category.position if c.category else -1), c.position))
+            for c in chans:
+                try:
+                    if any(c.permissions_for(r).view_channel for r in roles):
+                        found.setdefault(c.name, []).append(c)
+                except Exception:  # noqa: BLE001
+                    pass
+        self.groups = list(found.items())[:25]
+        self.picked = {i for i in self.picked if i < len(self.groups)}
+
+    def _build(self):
+        self.clear_items()
+        g = self.guild
+        defaults = [discord.Object(id=x, type=discord.Role) for x in self.d.roles]
+        rs = discord.ui.RoleSelect(placeholder="1️⃣ Choose role(s) first — e.g. 3D, 3E (many allowed)",
+                                   min_values=1, max_values=25, row=0, default_values=defaults)
         rs.callback = self._roles
         self.add_item(rs)
-        ms = discord.ui.Select(placeholder="🔔 Mention: No mention", row=2, options=[
-            discord.SelectOption(label=l, value=v, emoji=e, description=desc, default=(v == "none"))
+        if self.groups:
+            opts = []
+            for idx, (name, chans) in enumerate(self.groups):
+                where = ", ".join(sorted({(c.category.name if c.category else "—") for c in chans}))
+                opts.append(discord.SelectOption(label=name[:100], value=str(idx), default=idx in self.picked,
+                                                 description=f"{len(chans)} channel(s): {where}"[:100]))
+            cs = discord.ui.Select(placeholder="2️⃣ Choose channel(s) these roles can see", row=1,
+                                   min_values=1, max_values=len(opts), options=opts)
+        else:
+            cs = discord.ui.Select(placeholder="2️⃣ Channels appear here after you choose role(s)", row=1,
+                                   disabled=True, options=[discord.SelectOption(label="—", value="none")])
+        cs.callback = self._chans
+        self.add_item(cs)
+        ms = discord.ui.Select(placeholder="3️⃣ Mention", row=2, options=[
+            discord.SelectOption(label=l, value=v, emoji=e, description=desc, default=(v == self.d.mention))
             for v, l, e, desc in MENTION_MODES])
         ms.callback = self._mention
         self.add_item(ms)
-        ss = discord.ui.Select(placeholder="🎨 Style: Plain message", row=3, options=[
-            discord.SelectOption(label="Plain message", value="plain", emoji="💬", default=True,
-                                 description="Exactly as you write it (bold, lists, links …)"),
-            discord.SelectOption(label="Plain + link buttons", value="plain+btn", emoji="🔗",
-                                 description="Every link becomes a button, link written under it"),
-            discord.SelectOption(label="Card (box with title)", value="card", emoji="🪧",
-                                 description="Coloured box with a title"),
-            discord.SelectOption(label="Card + link buttons", value="card+btn", emoji="🧷",
-                                 description="Box + every link becomes a button")])
+        ss = discord.ui.Select(placeholder="4️⃣ Style", row=3, options=[
+            discord.SelectOption(label=l, value=v, emoji=e, description=desc, default=(v == self._style_value()))
+            for v, l, e, desc in self.STYLES])
         ss.callback = self._style
         self.add_item(ss)
         w = discord.ui.Button(label="Write message / add files", emoji="✍️", style=discord.ButtonStyle.primary, row=4)
@@ -381,6 +417,60 @@ class PostMenu(_Owned):
         c = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, row=4)
         c.callback = self._cancel
         self.add_item(c)
+
+    def _sync_channels(self):
+        ids = []
+        for i in sorted(self.picked):
+            ids += [c.id for c in self.groups[i][1]]
+        self.d.channels = list(dict.fromkeys(ids))
+
+    def status_text(self) -> str:
+        g = self.guild
+        roles = [r for r in (g.get_role(x) for x in self.d.roles) if r] if g else []
+        lines = ["📤 **Post as bot**",
+                 "1️⃣ Role(s) → 2️⃣ channel(s) they can see → 3️⃣ mention → 4️⃣ style → **✍️ Write**",
+                 f"🏷️ Roles: {', '.join(r.mention for r in roles) or '—'}"]
+        chans = [c for c in (g.get_channel(x) for x in self.d.channels) if c] if g else []
+        lines.append(f"📍 Channels ({len(chans)}): " + (", ".join(c.mention for c in chans[:30]) or "—"))
+        return "\n".join(lines)
+
+    async def _roles(self, i):
+        self.guild = i.guild
+        self.d.roles = [int(x) for x in i.data.get("values", [])]
+        self._compute_groups()
+        self._sync_channels()
+        self._build()
+        await i.response.edit_message(content=self.status_text(), view=self,
+                                      allowed_mentions=discord.AllowedMentions.none())
+
+    async def _chans(self, i):
+        self.guild = i.guild
+        self.picked = {int(x) for x in i.data.get("values", []) if x.isdigit()}
+        self._sync_channels()
+        self._build()
+        await i.response.edit_message(content=self.status_text(), view=self,
+                                      allowed_mentions=discord.AllowedMentions.none())
+
+    async def _mention(self, i):
+        self.d.mention = i.data["values"][0]
+        await i.response.defer()
+
+    async def _style(self, i):
+        v = i.data["values"][0]
+        self.d.style = v.split("+")[0]
+        self.d.linkbuttons = v.endswith("+btn")
+        await i.response.defer()
+
+    async def _write(self, i):
+        if not self.d.channels:
+            await i.response.send_message("📍 Choose role(s) and then channel(s) first "
+                                          "(or click 🤖 Only bot-test).", ephemeral=True)
+            return
+        await i.response.send_modal(PostModal(self.cog, self.user_id, self.d))
+
+    async def _cancel(self, i):
+        self.stop()
+        await i.response.edit_message(content="❎ Cancelled.", view=None)
 
     async def _test(self, i):
         ch = self.cog.bot.channel_for("test_channel")
@@ -396,40 +486,6 @@ class PostMenu(_Owned):
         self.d.channels = [ch.id]
         await i.response.send_message(f"🤖 Channel set to {ch.mention} only (the channel list above is ignored). "
                                       "Now click **✍️ Write message / add files**.", ephemeral=True)
-
-    async def _ch(self, i):
-        self.d.channels = [int(x) for x in i.data.get("values", [])]
-        await i.response.defer()
-
-    async def _roles(self, i):
-        self.d.roles = [int(x) for x in i.data.get("values", [])]
-        if self.d.roles and self.d.mention == "none":
-            self.d.mention = "roles"
-        await i.response.defer()
-
-    async def _mention(self, i):
-        self.d.mention = i.data["values"][0]
-        await i.response.defer()
-
-    async def _style(self, i):
-        v = i.data["values"][0]
-        self.d.style = v.split("+")[0]
-        self.d.linkbuttons = v.endswith("+btn")
-        await i.response.defer()
-
-    async def _write(self, i):
-        if not self.d.channels:
-            await i.response.send_message("📍 Choose at least one channel first.", ephemeral=True)
-            return
-        if self.d.mention in ("roles", "both") and not self.d.roles:
-            await i.response.send_message("🏷️ You chose to mention roles — select the role(s) first "
-                                          "(or change the mention option).", ephemeral=True)
-            return
-        await i.response.send_modal(PostModal(self.cog, self.user_id, self.d))
-
-    async def _cancel(self, i):
-        self.stop()
-        await i.response.edit_message(content="❎ Cancelled.", view=None)
 
 
 class PostModal(discord.ui.Modal):
