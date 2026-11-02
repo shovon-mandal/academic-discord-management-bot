@@ -30,9 +30,9 @@ URL_RE = re.compile(r"^https?://\S+$")
 INLINE_BTN = re.compile(r"\[\[\s*([^|\]]+?)\s*\|\s*(https?://[^\]\s]+)\s*\]\]")
 MENTION_MODES = [
     ("none", "No mention", "🔕", "Just post the message"),
-    ("roles", "Mention the roles I select", "🏷️", "Pings the roles chosen above"),
-    ("audience", "Mention who can see each channel", "👥", "e.g. 3D channel → @3D role (automatic per channel)"),
-    ("both", "Both: selected roles + channel's roles", "📣", "Selected roles and each channel's own roles"),
+    ("audience", "Mention who can see each channel", "👥", "Automatic: 3D channel → @3D, 4B channel → @4B"),
+    ("roles", "Mention the roles I select", "🏷️", "Each channel pings ONLY the selected roles that can see it"),
+    ("both", "Both: selected roles + channel's roles", "📣", "Still only roles that can see that channel"),
 ]
 
 
@@ -101,22 +101,28 @@ class Poster(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """Make sure the admin-only 🧪┃bot-test channel exists (to try posts before sending to students)."""
+        """Make sure the admin-only 🤖┃bot-test channel exists (to try posts before sending to students)."""
         if getattr(self, "_ready", False):
             return
         self._ready = True
-        if self.bot.channel_for("test_channel"):
+        name = (self.bot.settings.raw.get("channels", {}) or {}).get("test", "🤖┃bot-test")
+        cur = self.bot.channel_for("test_channel")
+        if cur:
+            if cur.name != name:
+                try:
+                    await cur.edit(name=name, reason="Test channel name from config.json")
+                except discord.HTTPException as e:
+                    log.warning("Could not rename test channel: %s", e)
             return
         adm = self.bot.channel_for("admin_channel")
         if adm is None:
             return
-        name = (self.bot.settings.raw.get("channels", {}) or {}).get("test", "🧪┃bot-test")
-        existing = discord.utils.get(adm.guild.text_channels, name=name)
+        existing = discord.utils.find(lambda c: c.name == name or "bot-test" in c.name, adm.guild.text_channels)
         try:
             ch = existing or await adm.clone(name=name, reason="Admin-only test channel")
             if not existing:
                 await ch.edit(topic="Only admins see this — try 📤 Post as bot, files, buttons here first")
-                await ch.send("🧪 **Test channel** — only admins can see this. Choose it in **📤 Post as bot** "
+                await ch.send("🤖 **Test channel** — only admins can see this. Choose it in **📤 Post as bot** "
                               "to try a post (files, buttons, mentions) before sending it to students.")
             self.bot.ids.set("test_channel", ch.id)
         except discord.HTTPException as e:
@@ -127,7 +133,13 @@ class Poster(commands.Cog):
         g = channel.guild
         roles = []
         if d.mention in ("roles", "both"):
-            roles += [g.get_role(r) for r in d.roles]
+            # only the selected roles that can actually SEE this channel (3D role is not pinged in 4B's channel)
+            for r in (g.get_role(x) for x in d.roles):
+                try:
+                    if r and channel.permissions_for(r).view_channel:
+                        roles.append(r)
+                except Exception:  # noqa: BLE001
+                    pass
         if d.mention in ("audience", "both"):
             roles += audience_roles(channel)
         roles = list(dict.fromkeys(r for r in roles if r))
@@ -275,9 +287,11 @@ class Poster(commands.Cog):
         lines = ["👀 **Preview** — only you see this. Nothing is posted yet.",
                  f"📍 Channels ({len(chans)}): " + ", ".join(c.mention for c in chans)]
         if chans:
-            mt, _ = self._mentions(d, chans[0])
-            lines.append(f"🔔 Mention: **{dict((m[0], m[1]) for m in MENTION_MODES)[d.mention]}**"
-                         + (f" — in {chans[0].mention}: {mt}" if mt else ""))
+            lines.append(f"🔔 Mention: **{dict((m[0], m[1]) for m in MENTION_MODES)[d.mention]}**")
+            if d.mention != "none":
+                for c in chans[:15]:
+                    mt, _ = self._mentions(d, c)
+                    lines.append(f"   • {c.mention} → {mt or '*(nobody — no selected role can see it)*'}")
         nlinks = len(self.LINK_RE.findall(d.text or "")) if d.linkbuttons else 0
         lines.append(f"🎨 Style: **{'Card' if d.style == 'card' else 'Plain message'}"
                      f"{' + link buttons' if d.linkbuttons else ''}** · 📎 Files: **{len(d.files)}** · "
@@ -361,7 +375,7 @@ class PostMenu(_Owned):
         w = discord.ui.Button(label="Write message / add files", emoji="✍️", style=discord.ButtonStyle.primary, row=4)
         w.callback = self._write
         self.add_item(w)
-        t = discord.ui.Button(label="Only bot-test (try first)", emoji="🧪", style=discord.ButtonStyle.secondary, row=4)
+        t = discord.ui.Button(label="Only bot-test (try first)", emoji="🤖", style=discord.ButtonStyle.secondary, row=4)
         t.callback = self._test
         self.add_item(t)
         c = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, row=4)
@@ -371,16 +385,16 @@ class PostMenu(_Owned):
     async def _test(self, i):
         ch = self.cog.bot.channel_for("test_channel")
         if ch is None:
-            name = (self.cog.bot.settings.raw.get("channels", {}) or {}).get("test", "🧪┃bot-test")
+            name = (self.cog.bot.settings.raw.get("channels", {}) or {}).get("test", "🤖┃bot-test")
             ch = discord.utils.find(lambda c: "bot-test" in c.name or c.name == name, i.guild.text_channels)
             if ch:
                 self.cog.bot.ids.set("test_channel", ch.id)
         if ch is None:
-            await i.response.send_message("🧪 Test channel not found — restart the bot or run `!setup_server`.",
+            await i.response.send_message("🤖 Test channel not found — restart the bot or run `!setup_server`.",
                                           ephemeral=True)
             return
         self.d.channels = [ch.id]
-        await i.response.send_message(f"🧪 Channel set to {ch.mention} only (the channel list above is ignored). "
+        await i.response.send_message(f"🤖 Channel set to {ch.mention} only (the channel list above is ignored). "
                                       "Now click **✍️ Write message / add files**.", ephemeral=True)
 
     async def _ch(self, i):

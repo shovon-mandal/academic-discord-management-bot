@@ -69,7 +69,7 @@
     "admin_category": "🔒 ADMIN",
     "admin": "🛠️┃admin",
     "logs": "📜┃bot-logs",
-    "test": "🧪┃bot-test",
+    "test": "🤖┃bot-test",
 
     "section": [
       { "key": "announcement", "name": "📢┃announcement", "type": "text", "student_write": false, "topic": "Section {section} announcements ({courses})" },

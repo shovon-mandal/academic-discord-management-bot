@@ -359,7 +359,7 @@ class ServerSetup(commands.Cog):
                          topic="Admin commands. Type !help")
         await self._text(guild, "log_channel", ch_cfg["logs"], admcat, admin_ow, stats,
                          topic="Automatic bot logs")
-        await self._text(guild, "test_channel", ch_cfg.get("test", "🧪┃bot-test"), admcat, admin_ow, stats,
+        await self._text(guild, "test_channel", ch_cfg.get("test", "🤖┃bot-test"), admcat, admin_ow, stats,
                          topic="Only admins see this — try 📤 Post as bot, files, buttons here first")
 
         # 7) remove channels the bot created earlier that are no longer in config.json
