@@ -361,9 +361,27 @@ class PostMenu(_Owned):
         w = discord.ui.Button(label="Write message / add files", emoji="✍️", style=discord.ButtonStyle.primary, row=4)
         w.callback = self._write
         self.add_item(w)
+        t = discord.ui.Button(label="Only bot-test (try first)", emoji="🧪", style=discord.ButtonStyle.secondary, row=4)
+        t.callback = self._test
+        self.add_item(t)
         c = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, row=4)
         c.callback = self._cancel
         self.add_item(c)
+
+    async def _test(self, i):
+        ch = self.cog.bot.channel_for("test_channel")
+        if ch is None:
+            name = (self.cog.bot.settings.raw.get("channels", {}) or {}).get("test", "🧪┃bot-test")
+            ch = discord.utils.find(lambda c: "bot-test" in c.name or c.name == name, i.guild.text_channels)
+            if ch:
+                self.cog.bot.ids.set("test_channel", ch.id)
+        if ch is None:
+            await i.response.send_message("🧪 Test channel not found — restart the bot or run `!setup_server`.",
+                                          ephemeral=True)
+            return
+        self.d.channels = [ch.id]
+        await i.response.send_message(f"🧪 Channel set to {ch.mention} only (the channel list above is ignored). "
+                                      "Now click **✍️ Write message / add files**.", ephemeral=True)
 
     async def _ch(self, i):
         self.d.channels = [int(x) for x in i.data.get("values", [])]
