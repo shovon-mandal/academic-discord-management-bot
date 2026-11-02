@@ -924,7 +924,9 @@ class Panel(commands.Cog):
             await menu(PostMenu(pc, uid),
                        "📤 **Post as bot** — the bot posts your message for you.\n"
                        "1️⃣ Choose **channel(s)** · 2️⃣ roles to mention (optional) · 3️⃣ mention option · 4️⃣ style\n"
-                       "5️⃣ Click **✍️ Write message / add files** → preview → **✅ Post now**")
+                       "5️⃣ Click **✍️ Write message / add files** → preview → **✅ Post now**\n"
+                       "🔗 Style **…+ link buttons**: every link in your text becomes a button (link written under it)\n"
+                       "🧪 First time? Choose **🧪┃bot-test** (only admins see it) to try.")
             return
         if key == "clean_welcome":
             await menu(CleanWelcomeMenu(self, uid),

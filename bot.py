@@ -169,7 +169,8 @@ class ClassBot(commands.Bot):
             return False
         if ctx.command and ctx.command.qualified_name in ("setup_server", "reset_server"):  # need confirmation (see server_setup)
             return True  # allowed anywhere (first run: admin channel doesn't exist yet)
-        allowed = {c.id for c in (self.channel_for("admin_channel"), self.channel_for("log_channel")) if c}
+        allowed = {c.id for c in (self.channel_for("admin_channel"), self.channel_for("log_channel"),
+                                  self.channel_for("test_channel")) if c}
         return not allowed or ctx.channel.id in allowed
 
     async def on_command_error(self, ctx: commands.Context, error: Exception) -> None:

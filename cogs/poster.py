@@ -8,6 +8,8 @@ Panel button "📤 Post as bot":
 Text command (good for big files from a PC):
   !post #channel1 #channel2 @Role your message      (attach files to the same message)
   !post #channel1 audience your message             (mention the roles that can see each channel)
+  !post #channel1 buttons your message              (every link → a button, link written under it)
+  (keywords can be combined: audience buttons card)
 
 Link buttons: one per line in the "Buttons" box, or inside the text:
   Attendance sheet | https://docs.google.com/...
@@ -90,11 +92,35 @@ class Draft:
         self.title = ""
         self.buttons: list = []      # (label, url)
         self.files: list = []        # (filename, bytes)
+        self.linkbuttons = False     # every link in the text → a button (link shown under it)
 
 
 class Poster(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Make sure the admin-only 🧪┃bot-test channel exists (to try posts before sending to students)."""
+        if getattr(self, "_ready", False):
+            return
+        self._ready = True
+        if self.bot.channel_for("test_channel"):
+            return
+        adm = self.bot.channel_for("admin_channel")
+        if adm is None:
+            return
+        name = (self.bot.settings.raw.get("channels", {}) or {}).get("test", "🧪┃bot-test")
+        existing = discord.utils.get(adm.guild.text_channels, name=name)
+        try:
+            ch = existing or await adm.clone(name=name, reason="Admin-only test channel")
+            if not existing:
+                await ch.edit(topic="Only admins see this — try 📤 Post as bot, files, buttons here first")
+                await ch.send("🧪 **Test channel** — only admins can see this. Choose it in **📤 Post as bot** "
+                              "to try a post (files, buttons, mentions) before sending it to students.")
+            self.bot.ids.set("test_channel", ch.id)
+        except discord.HTTPException as e:
+            log.warning("Could not create test channel: %s", e)
 
     # ------------------------------------------------------------ building + sending
     def _mentions(self, d: Draft, channel) -> tuple:
@@ -140,8 +166,75 @@ class Poster(commands.Cog):
             chunks.append(cur)
         return [{"content": c.rstrip() or None} for c in chunks] or [{"content": None}]
 
+    LINK_RE = re.compile(r"https?://\S+")
+    IMG_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+
+    @staticmethod
+    def _label_for(before: str) -> str:
+        lab = re.sub(r"[*_`~>#]", "", before).strip().rstrip(":：-–—|=→>").strip()
+        lab = re.sub(r"^[\-•·\d.)\s]+", "", lab).strip() or "Open link"
+        return lab[:80]
+
+    def build_layout(self, d: Draft, mention_text: str = ""):
+        """Components-V2 message: text, and for every link a BUTTON with the link written under it."""
+        items, buf = [], []
+
+        def flush():
+            txt = "\n".join(buf).strip("\n")
+            if txt.strip():
+                items.append(discord.ui.TextDisplay(txt[:3900]))
+            buf.clear()
+
+        if mention_text:
+            buf.append(mention_text)
+        if d.title:
+            buf.append(f"## {d.title}")
+        n_btn = 0
+        for line in (d.text or "").split("\n"):
+            urls = self.LINK_RE.findall(line)
+            if not urls or n_btn >= 20:
+                buf.append(line)
+                continue
+            flush()
+            pos = 0
+            for u in urls:
+                u = u.rstrip(").,;>")
+                i = line.find(u, pos)
+                before = line[pos:i] if i >= 0 else ""
+                pos = (i + len(u)) if i >= 0 else pos
+                items.append(discord.ui.ActionRow(discord.ui.Button(label=self._label_for(before), url=u,
+                                                                    style=discord.ButtonStyle.link, emoji="🔗")))
+                items.append(discord.ui.TextDisplay(u))
+                n_btn += 1
+            rest = line[pos:].strip()
+            if rest:
+                buf.append(rest)
+        for label, url in d.buttons[:max(0, 20 - n_btn)]:
+            flush()
+            items.append(discord.ui.ActionRow(discord.ui.Button(label=label, url=url, style=discord.ButtonStyle.link,
+                                                                emoji="🔗")))
+            items.append(discord.ui.TextDisplay(url))
+        flush()
+        imgs = [n for n, _ in d.files if n.lower().endswith(self.IMG_EXT)]
+        if imgs:
+            items.append(discord.ui.MediaGallery(*[discord.MediaGalleryItem(f"attachment://{n}") for n in imgs[:10]]))
+        for n, _ in d.files:
+            if n not in imgs:
+                items.append(discord.ui.File(f"attachment://{n}"))
+        v = discord.ui.LayoutView(timeout=None)
+        if d.style == "card":
+            v.add_item(discord.ui.Container(*items, accent_colour=discord.Color.blurple()))
+        else:
+            for it in items:
+                v.add_item(it)
+        v.stop()
+        return v
+
     async def send_to(self, d: Draft, channel) -> discord.Message | None:
         mention_text, allowed = self._mentions(d, channel)
+        if d.linkbuttons:
+            files = [discord.File(io.BytesIO(b), filename=n) for n, b in d.files]
+            return await channel.send(view=self.build_layout(d, mention_text), files=files, allowed_mentions=allowed)
         payloads = self._payloads(d, mention_text)
         last = None
         for i, p in enumerate(payloads):
@@ -185,8 +278,10 @@ class Poster(commands.Cog):
             mt, _ = self._mentions(d, chans[0])
             lines.append(f"🔔 Mention: **{dict((m[0], m[1]) for m in MENTION_MODES)[d.mention]}**"
                          + (f" — in {chans[0].mention}: {mt}" if mt else ""))
-        lines.append(f"🎨 Style: **{'Card' if d.style == 'card' else 'Plain message'}** · 📎 Files: **{len(d.files)}** · "
-                     f"🔗 Buttons: **{len(d.buttons)}**")
+        nlinks = len(self.LINK_RE.findall(d.text or "")) if d.linkbuttons else 0
+        lines.append(f"🎨 Style: **{'Card' if d.style == 'card' else 'Plain message'}"
+                     f"{' + link buttons' if d.linkbuttons else ''}** · 📎 Files: **{len(d.files)}** · "
+                     f"🔗 Buttons: **{len(d.buttons) + nlinks}**")
         return "\n".join(lines)
 
     # ------------------------------------------------------------ text command
@@ -200,9 +295,16 @@ class Poster(commands.Cog):
             raise commands.BadArgument("Mention at least one channel, e.g. "
                                        "`!post #announcement #resources @3D Attendance sheet: https://...`")
         text = re.sub(r"<#\d+>|<@&\d+>", "", rest)
-        aud = re.search(r"(?i)^\s*(audience|everyone-here)\b", text)
-        if aud:
-            text = text[aud.end():]
+        aud = False
+        while True:
+            m = re.match(r"(?i)^\s*(audience|buttons|card)\b", text)
+            if not m:
+                break
+            word = m.group(1).lower()
+            aud = aud or word == "audience"
+            d.linkbuttons = d.linkbuttons or word == "buttons"
+            d.style = "card" if word == "card" else d.style
+            text = text[m.end():]
         d.mention = ("both" if d.roles else "audience") if aud else ("roles" if d.roles else "none")
         d.text, d.buttons = parse_buttons(text.strip())
         for a in ctx.message.attachments[:10]:
@@ -248,8 +350,12 @@ class PostMenu(_Owned):
         ss = discord.ui.Select(placeholder="🎨 Style: Plain message", row=3, options=[
             discord.SelectOption(label="Plain message", value="plain", emoji="💬", default=True,
                                  description="Exactly as you write it (bold, lists, links …)"),
-            discord.SelectOption(label="Card (embed)", value="card", emoji="🪧",
-                                 description="Coloured box with a title")])
+            discord.SelectOption(label="Plain + link buttons", value="plain+btn", emoji="🔗",
+                                 description="Every link becomes a button, link written under it"),
+            discord.SelectOption(label="Card (box with title)", value="card", emoji="🪧",
+                                 description="Coloured box with a title"),
+            discord.SelectOption(label="Card + link buttons", value="card+btn", emoji="🧷",
+                                 description="Box + every link becomes a button")])
         ss.callback = self._style
         self.add_item(ss)
         w = discord.ui.Button(label="Write message / add files", emoji="✍️", style=discord.ButtonStyle.primary, row=4)
@@ -274,7 +380,9 @@ class PostMenu(_Owned):
         await i.response.defer()
 
     async def _style(self, i):
-        self.d.style = i.data["values"][0]
+        v = i.data["values"][0]
+        self.d.style = v.split("+")[0]
+        self.d.linkbuttons = v.endswith("+btn")
         await i.response.defer()
 
     async def _write(self, i):
@@ -338,6 +446,13 @@ class PostModal(discord.ui.Modal):
         sample = Draft()
         sample.__dict__.update(d.__dict__)
         sample.mention = "none"
+        if d.linkbuttons:
+            try:
+                await interaction.followup.send(ephemeral=True, view=self.cog.build_layout(sample),
+                                                files=[discord.File(io.BytesIO(b), filename=n) for n, b in d.files])
+            except discord.HTTPException as e:
+                await interaction.followup.send(f"⚠️ Preview problem: `{e.text or e}`", ephemeral=True)
+            return
         for p in self.cog._payloads(sample, "")[:3]:
             kw = {k: v for k, v in p.items() if v}
             v = self.cog._view(d)
