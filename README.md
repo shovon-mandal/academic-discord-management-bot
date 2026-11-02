@@ -227,6 +227,7 @@ Commands work only in `🛠️┃admin` or `📜┃bot-logs`, and only for the t
 | `!rename @user <name>` | Fix name / nickname | `!rename @rahim Md Rahim Uddin` |
 | `!add_section @user <sec…>` | Give an extra section (student in 3D **and** 4B) — only the teacher can give it | `!add_section @rahim 4B` |
 | `!remove_section @user <sec…>` | Remove an extra section | `!remove_section @rahim 4B` |
+| `!post #ch… [@Role…] [audience] <text>` | Bot posts your text + attached files + `[[Label \| link]]` buttons in many channels (panel: 📤 Post as bot) | `!post #announcement @3D Attendance: [[Open sheet \| https://…]]` |
 | `!clean_welcome [all]` | Clean #welcome and #id-name-section: verified / left students (also automatic); `all` = also students still waiting. Panel: 🧹 Clean welcome | `!clean_welcome all` |
 | `!pending` | Requests waiting for approval | `!pending` |
 | `!notify_unverified` | Remind unverified members | `!notify_unverified` |

@@ -716,6 +716,7 @@ B = discord.ButtonStyle
 PANEL_GROUPS = [
     ("Row 1 · 📢 Communication", discord.Color.blurple(), [
         ("announce", "Announce", "📢", B.primary, "Pick section/course → write → posts in their announcement channel (can be scheduled)."),
+        ("post", "Post as bot", "📤", B.success, "ANY channels (many) + roles → your text / files / link buttons → bot posts it everywhere."),
         ("dm", "DM students", "✉️", B.primary, "Pick section/course → write → every student gets a private DM."),
         ("scheduled", "Scheduled posts", "🗓️", B.secondary, "See or cancel announcements waiting to be posted."),
         ("invite", "Invite link", "🔗", B.secondary, "Invite link + ready message for Facebook / WhatsApp."),
@@ -916,6 +917,14 @@ class Panel(commands.Cog):
 
         if key == "panel":
             await self.send_panel_private(interaction)
+            return
+        if key == "post":
+            from cogs.poster import PostMenu
+            pc = interaction.client.get_cog("Poster")
+            await menu(PostMenu(pc, uid),
+                       "📤 **Post as bot** — the bot posts your message for you.\n"
+                       "1️⃣ Choose **channel(s)** · 2️⃣ roles to mention (optional) · 3️⃣ mention option · 4️⃣ style\n"
+                       "5️⃣ Click **✍️ Write message / add files** → preview → **✅ Post now**")
             return
         if key == "clean_welcome":
             await menu(CleanWelcomeMenu(self, uid),

@@ -36,6 +36,7 @@ EXTENSIONS = (
     "cogs.maintenance",
     "cogs.panel",
     "cogs.routine",
+    "cogs.poster",
 )
 
 log = logging.getLogger("nubtk")
