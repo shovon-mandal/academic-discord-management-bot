@@ -176,13 +176,19 @@ class Submissions(commands.Cog):
             if not name:
                 rec = self.bot.store.find_by_student_id(sid)
                 name = rec[0].get("name", "") if rec else ""
-            old = latest.get((sec, sid))
-            if old is None or (t and old[2] and t > old[2]):  # keep the latest submission
-                latest[(sec, sid)] = (sid, name, t, row[ct].strip() if ct is not None and ct < len(row) else "")
+            latest.setdefault((sec, sid), []).append(
+                (sid, name, t, row[ct].strip() if ct is not None and ct < len(row) else ""))
         out = {sec: {"done": [], "missing": [], "unknown": unknown} for sec in job.sections}
-        for (sec, sid), (_, name, t, raw) in latest.items():
+
+        def fmt(t, raw):
+            return t.strftime("%d %b %I:%M %p") if t else raw[:16]
+        for (sec, sid), subs in latest.items():
+            # the FIRST submission counts; later ones are shown as duplicates (not counted)
+            subs.sort(key=lambda x: (x[2] is None, x[2] or datetime.max))
+            _, name, t, raw = subs[0]
             late = bool(job.deadline and t and t > job.deadline)
-            out[sec]["done"].append((sid, name, t.strftime("%d %b %I:%M %p") if t else raw[:16], late, t))
+            dups = [fmt(x[2], x[3]) for x in subs[1:]]
+            out[sec]["done"].append((sid, name, fmt(t, raw), late, t, dups))
         for sec in job.sections:
             out[sec]["done"].sort(key=lambda x: (x[4] is None, x[4] or datetime.max, x[1]))
             got = {x[0] for x in out[sec]["done"]}
@@ -199,6 +205,9 @@ class Submissions(commands.Cog):
         if "missing" in job.options:
             head.append(f"❌ **Not submitted: {len(missing)}**")
         n_late = sum(1 for x in done if x[3])
+        n_dup = sum(len(x[5]) for x in done)
+        if n_dup:
+            head.append(f"🔁 Duplicates: **{n_dup}** (not counted)")
         if job.deadline:
             head.append(f"⏰ Deadline: **{job.deadline.strftime('%d %b %Y, %I:%M %p')}**"
                         + (f" · late: **{n_late}**" if n_late else ""))
@@ -207,8 +216,10 @@ class Submissions(commands.Cog):
             desc += f"\n📝 {job.note}"
         desc += f"\n🕒 Updated: {self.s.now().strftime('%d %b %Y, %I:%M %p')}"
         rows = [f"{'#':>3}  {'ID':<11}  {'Name':<22}  Submitted"]
-        for i, (sid, name, tt, late, _) in enumerate(done, 1):
+        for i, (sid, name, tt, late, _, dups) in enumerate(done, 1):
             rows.append(f"{i:>3}  {sid[-11:]:<11}  {name[:22]:<22}  {tt}{'  LATE' if late else ''}")
+            for d in dups:
+                rows.append(f"{'':>3}  {'':<11}  {'↳ duplicate':<22}  {d}  NOT COUNTED")
         blocks = self._blocks(rows) if done else ["*Nobody yet.*"]
         embeds = []
         for i, b in enumerate(blocks):
@@ -286,7 +297,9 @@ class Submissions(commands.Cog):
             d = data[sec]
             lines.append(f"• **{sec}**: ✅ {len(d['done'])} submitted"
                          + (f" · ❌ {len(d['missing'])} not submitted" if "missing" in job.options else "")
-                         + (f" · ⏰ {sum(1 for x in d['done'] if x[3])} late" if job.deadline else ""))
+                         + (f" · ⏰ {sum(1 for x in d['done'] if x[3])} late" if job.deadline else "")
+                         + (f" · 🔁 {sum(len(x[5]) for x in d['done'])} duplicate (not counted)"
+                            if any(x[5] for x in d['done']) else ""))
         unk = next(iter(data.values()))["unknown"] if data else 0
         if unk:
             lines.append(f"⚠️ **{unk}** row(s): section not found (no section in the sheet and the ID is not "
