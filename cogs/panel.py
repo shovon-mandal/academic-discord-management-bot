@@ -763,6 +763,7 @@ PANEL_GROUPS = [
     ("Row 7 · 📌 Deadlines & tests", discord.Color.orange(), [
         ("event_add", "Add deadline / test", "📌", B.success, "Assignment, CT, quiz, lab report, presentation… → students see it in 📅 My section today."),
         ("event_list", "Upcoming deadlines", "📋", B.secondary, "See all upcoming deadlines and tests, delete wrong ones."),
+        ("subs", "Submission list", "📝", B.primary, "Google Sheet / Form link → who submitted (ID, name, time) → each section's list in its own channel."),
     ]),
     ("Row 8 · 📖 Help", discord.Color.teal(), [
         ("allcmds", "All commands", "📖", B.primary, "Every text command with an example."),
@@ -917,6 +918,10 @@ class Panel(commands.Cog):
 
         if key == "panel":
             await self.send_panel_private(interaction)
+            return
+        if key == "subs":
+            from cogs.submissions import SubModal
+            await interaction.response.send_modal(SubModal(interaction.client.get_cog("Submissions"), interaction.user.id))
             return
         if key == "post":
             from cogs.poster import PostMenu
