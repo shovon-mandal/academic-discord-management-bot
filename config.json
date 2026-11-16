@@ -77,7 +77,7 @@
       { "key": "resources", "name": "📚┃resources", "type": "text", "student_write": false },
       { "key": "marks", "name": "📊┃marks-sheet", "type": "text", "student_write": false },
       { "key": "presentation", "name": "🎞️┃presentation-slide", "type": "text", "student_write": true, "topic": "Upload your presentation slides here" },
-      { "key": "routine", "name": "🗓️┃routine", "type": "text", "student_write": false, "topic": "Latest class routine (pinned). Updated automatically from the department routine." }
+      { "key": "routine", "name": "🗓️┃routine-and-deadlines", "type": "text", "student_write": false, "topic": "🗓️ Class routine (pinned) · 📅 buttons: today's classes + deadlines, CT, quiz · 📝 assignment / lab submission status" }
     ],
 
     "lab": [

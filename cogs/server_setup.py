@@ -239,6 +239,32 @@ class ServerSetup(commands.Cog):
                 await self._text(guild, key, tpl["name"], category,
                                  self._text_ow(guild, roles, bool(tpl.get("student_write", False))), stats, topic=topic)
 
+    @commands.Cog.listener("on_ready")
+    async def _sync_section_names(self):
+        """Keep section channel names (and fixed topics) in step with config.json without !setup_server."""
+        if getattr(self, "_names_synced", False):
+            return
+        self._names_synced = True
+        g = self.bot.main_guild()
+        if g is None:
+            return
+        for sec in self.bot.settings.sections:
+            for tpl in self.bot.settings.raw.get("channels", {}).get("section", []):
+                ch = self._get(g, f"sec:{sec}:{tpl['key']}", discord.TextChannel)
+                if ch is None:
+                    continue
+                edits = {}
+                if ch.name != tpl["name"]:
+                    edits["name"] = tpl["name"]
+                topic = tpl.get("topic")
+                if topic and "{" not in topic and (ch.topic or "") != topic:
+                    edits["topic"] = topic
+                if edits:
+                    try:
+                        await ch.edit(reason="Name/topic from config.json", **edits)
+                    except discord.HTTPException as e:
+                        log.warning("Could not rename %s: %s", ch, e)
+
     # ------------------------------------------------------------ main build
     async def build(self, guild: discord.Guild, status_msg=None) -> str:
         s = self.s

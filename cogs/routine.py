@@ -417,7 +417,9 @@ class Routine(commands.Cog):
         for x in mine:
             x["title"] = self._course_name(x["course"])
         e = discord.Embed(title=f"🗓️ Section {sec}{eve} — Class Routine", color=discord.Color(s.section_color(sec)),
-                          description=f"📅 **Effective from:** {effective or '—'}\n🕒 **Last updated:** {updated or '—'}")
+                          description=(f"📅 **Effective from:** {effective or '—'}\n🕒 **Last updated:** {updated or '—'}\n"
+                                       "👇 **Buttons below:** today's / tomorrow's classes + deadlines, CT, quiz\n"
+                                       "📝 Assignment / lab **submission lists** are posted in this channel too"))
         if mine:
             e.add_field(name=f"👨‍🏫 Classes with {self.teacher}", inline=False,
                         value=self._ansi_table(mine, mine_view=True)[:1024])
@@ -445,7 +447,7 @@ class Routine(commands.Cog):
         e.set_footer(text="* (yellow) = class with " + (self.teacher or "me") + " · this pinned message is always the latest")
         return [e], files
 
-    VIEW_VERSION = 8  # bump when the buttons under the pinned routine change → auto re-post
+    VIEW_VERSION = 9  # bump when the buttons under the pinned routine change → auto re-post
 
     def _link_view(self):
         """Under the pinned routine: students' 📅 buttons + 📄 sheet link (teacher updates from the admin panel)."""
@@ -607,8 +609,16 @@ class Routine(commands.Cog):
             return None
         # clean channel: remove every old bot message (old routine, old change-logs, pin notices)
         try:
+            def is_routine_msg(m):  # never touch submission lists / other posts in this channel
+                if m.type == discord.MessageType.pins_add:
+                    return True
+                if m.author.id != self.bot.user.id:
+                    return False
+                titles = " ".join((e.title or "") for e in m.embeds)
+                return (m.pinned or "Class Routine" in titles or "classes with" in titles
+                        or (m.content or "").startswith(("🔔 **Class routine", "🗓️")))
             async for m in ch.history(limit=200):
-                if m.author.id == self.bot.user.id or m.type == discord.MessageType.pins_add:
+                if is_routine_msg(m):
                     try:
                         await m.delete()
                     except discord.HTTPException:

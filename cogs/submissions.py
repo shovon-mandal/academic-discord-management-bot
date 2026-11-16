@@ -132,7 +132,7 @@ class Job:
         self.header: list = []
         self.cols: dict = {}
         self.sections: list = []
-        self.channel_key = "announcement"
+        self.channel_key = "routine"   # 🗓️┃routine-and-deadlines
         self.options = {"missing"}   # missing / mention / late
         self.deadline: datetime | None = None
 
