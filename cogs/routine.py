@@ -531,8 +531,10 @@ class Routine(commands.Cog):
         if old:
             self.save_events()
 
-    async def announce_event(self, eid):
+    async def announce_event(self, eid, mode: str = "new"):
+        """mode 'new' = post (and notify) · 'edit' = edit the earlier announcements in place (no notification)."""
         ev = self._events()[eid]
+        msgs = ev.setdefault("msgs", {})
         from datetime import datetime as _dt
         w = _dt.fromisoformat(ev["when"])
         name, icon = self.EVENT_TYPES.get(ev["kind"], ("Other", "📌"))
@@ -546,12 +548,23 @@ class Routine(commands.Cog):
             emb = discord.Embed(title=f"{icon} {name}: {ev['title']}", color=discord.Color.orange(),
                                 description=(f"🗓️ **{w:%A, %d %B %Y}**\n⏰ **{w:%I:%M %p}**"
                                              + (f"\n\n{ev['details']}" if ev.get("details") else "")))
-            emb.set_footer(text=f"{self.s.teacher} · Section {sec} · also shown under 📅 in 🗓️┃routine")
+            emb.set_footer(text=f"{self.s.teacher} · Section {sec} · also shown under 📅 in 🗓️┃routine-and-deadlines"
+                                + (" · ✏️ updated" if ev.get("edited") else ""))
             try:
-                await ch.send(content=role.mention if role else None, embed=emb)
+                if mode == "edit":
+                    old = msgs.get(sec)
+                    if not old:
+                        continue
+                    m = await self.bot.get_channel(int(old[0])).fetch_message(int(old[1]))
+                    await m.edit(embed=emb)
+                else:
+                    m = await ch.send(content=(("✏️ **Updated:** " if ev.get("edited") else "")
+                                               + (role.mention if role else "")) or None, embed=emb)
+                    msgs[sec] = [m.channel.id, m.id]
                 posted.append(sec)
-            except discord.HTTPException:
+            except (discord.HTTPException, AttributeError):
                 pass
+        self.save_events()
         return posted
 
     # ------------------------------------------------------------ students: "my section's classes today"

@@ -394,7 +394,7 @@ class EventModal(discord.ui.Modal):
         await interaction.response.send_message(
             f"✅ Saved: {r.event_line(when, r._events()[eid], True)}\n"
             + (f"📢 Announced in: {', '.join(posted)}\n" if posted else "")
-            + "Students see it under 📅 **My section today** in 🗓️┃routine (on the day and 7 days before).",
+            + "Students see it under 📅 **My section today** in 🗓️┃routine-and-deadlines (on the day and 7 days before).",
             ephemeral=True)
         await done(self.menu, "✅ Deadline / test saved.")
 
@@ -404,12 +404,22 @@ class EventsListMenu(BaseMenu):
         super().__init__(cog, user_id)
         if items:
             r = cog.bot.get_cog("Routine")
-            opts = [discord.SelectOption(
-                label=f"{w:%d %b %H:%M} · {r.EVENT_TYPES.get(ev['kind'], ('', ''))[0]}: {ev['title']}"[:100],
-                value=eid, description=", ".join(ev["sections"])[:100]) for w, eid, ev in items[:25]]
-            sel = discord.ui.Select(placeholder="Select to delete…", options=opts, min_values=1, max_values=len(opts))
+
+            def opts():
+                return [discord.SelectOption(
+                    label=f"{w:%d %b %H:%M} · {r.EVENT_TYPES.get(ev['kind'], ('', ''))[0]}: {ev['title']}"[:100],
+                    value=eid, description=", ".join(ev["sections"])[:100]) for w, eid, ev in items[:25]]
+            ed = discord.ui.Select(placeholder="✏️ Select ONE to edit…", options=opts(), row=0)
+            ed.callback = self._edit
+            self.add_item(ed)
+            o = opts()
+            sel = discord.ui.Select(placeholder="🗑️ Select to delete…", options=o, min_values=1, max_values=len(o), row=1)
             sel.callback = self._delete
             self.add_item(sel)
+
+    async def _edit(self, interaction):
+        eid = interaction.data["values"][0]
+        await interaction.response.send_modal(EventEditModal(self.cog, eid, interaction))
 
     async def _delete(self, interaction):
         r = self.cog.bot.get_cog("Routine")
@@ -417,6 +427,64 @@ class EventsListMenu(BaseMenu):
             r._events().pop(eid, None)
         r.save_events()
         await interaction.response.edit_message(content="🗑️ Deleted.", view=None, embed=None)
+
+
+class EventEditModal(discord.ui.Modal):
+    def __init__(self, cog, eid, menu):
+        r = cog.bot.get_cog("Routine")
+        ev = r._events()[eid]
+        super().__init__(title="✏️ Edit deadline / test", timeout=900)
+        self.cog, self.eid, self.menu = cog, eid, menu
+        from datetime import datetime as _dt
+        w = _dt.fromisoformat(ev["when"])
+        self.head = discord.ui.TextInput(label="Title", max_length=100, default=ev["title"])
+        self.when = discord.ui.TextInput(label="Date & time", max_length=30, default=f"{w:%Y-%m-%d %H:%M}",
+                                         placeholder="2026-10-30 23:59")
+        self.secs = discord.ui.TextInput(label="Sections (space separated, or all)", max_length=60,
+                                         default=" ".join(ev["sections"]))
+        self.details = discord.ui.TextInput(label="Details (optional)", required=False, max_length=600,
+                                            style=discord.TextStyle.paragraph, default=ev.get("details") or None)
+        had = bool(ev.get("msgs"))
+        self.mode = discord.ui.TextInput(label="Announcement: edit / new / no", max_length=4,
+                                         default="edit" if had else "no",
+                                         placeholder="edit = fix old post silently · new = post again (notify)")
+        for x in (self.head, self.when, self.secs, self.details, self.mode):
+            self.add_item(x)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        r = self.cog.bot.get_cog("Routine")
+        ev = r._events().get(self.eid)
+        if ev is None:
+            await interaction.response.send_message("This item was deleted.", ephemeral=True)
+            return
+        raw = self.when.value.strip()
+        when = self.cog.parse_when(raw) or self.cog.parse_when(raw + " 23:59")
+        if not when:
+            await interaction.response.send_message("⚠️ Could not read the date. Use `2026-10-30 23:59`.", ephemeral=True)
+            return
+        words = self.secs.value.replace(",", " ").split()
+        if any(w.lower() == "all" for w in words):
+            secs = ["all"]
+        else:
+            secs = [x for x in (self.cog.s.normalize_section(w) for w in words) if x]
+        if not secs:
+            await interaction.response.send_message("⚠️ Write at least one valid section (e.g. `3D 3E`) or `all`.",
+                                                    ephemeral=True)
+            return
+        ev.update({"title": self.head.value.strip(), "when": when.isoformat(timespec="minutes"), "sections": secs,
+                   "details": (self.details.value or "").strip(), "edited": self.cog.s.now_str()})
+        r.save_events()
+        mode = (self.mode.value or "no").strip().lower()
+        posted = []
+        if mode.startswith("e"):
+            posted = await r.announce_event(self.eid, "edit")
+        elif mode.startswith("n"):
+            posted = await r.announce_event(self.eid, "new")
+        await interaction.response.send_message(
+            f"✅ Updated: {r.event_line(when, ev, True)}\n"
+            + (f"📢 Announcement {'edited' if mode.startswith('e') else 'posted'} in: {', '.join(posted)}\n" if posted else "")
+            + "Students see the new date under 📅 in 🗓️┃routine-and-deadlines.", ephemeral=True)
+        await done(self.menu, "✅ Deadline / test updated.")
 
 
 # ====================================================================== attendance
@@ -762,7 +830,7 @@ PANEL_GROUPS = [
     ]),
     ("Row 7 · 📌 Deadlines & tests", discord.Color.orange(), [
         ("event_add", "Add deadline / test", "📌", B.success, "Assignment, CT, quiz, lab report, presentation… → students see it in 📅 My section today."),
-        ("event_list", "Upcoming deadlines", "📋", B.secondary, "See all upcoming deadlines and tests, delete wrong ones."),
+        ("event_list", "Edit / delete deadlines", "📋", B.secondary, "See all upcoming deadlines and tests → ✏️ edit (date, title, sections…) or 🗑️ delete."),
         ("subs", "Submission list", "📝", B.primary, "Google Sheet / Form link → who submitted (ID, name, time) → each section's list in its own channel."),
     ]),
     ("Row 8 · 📖 Help", discord.Color.teal(), [
