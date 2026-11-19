@@ -31,6 +31,7 @@ def _dt_fromiso(x):
 log = logging.getLogger("nubtk.routine")
 STATE_FILE = DATA_DIR / "routine" / "state.json"
 EVENTS_FILE = DATA_DIR / "events.json"
+CHANGES_FILE = DATA_DIR / "class_changes.json"
 
 DAYS = ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 DAY_ALIASES = {d[:3].lower(): d for d in DAYS}
@@ -601,6 +602,88 @@ class Routine(commands.Cog):
         if old:
             self.save_events()
 
+    # ---- class cancel / reschedule / online
+    def _changes(self) -> dict:
+        if not hasattr(self, "_chg"):
+            self._chg = load_json(CHANGES_FILE, {})
+        return self._chg
+
+    def save_changes(self):
+        cut = (self.s.now() - timedelta(days=2)).date().isoformat()
+        for k in [k for k, v in self._changes().items() if max(v["date"], v.get("new_date") or "") < cut]:
+            self._changes().pop(k, None)
+        save_json(CHANGES_FILE, self._changes())
+
+    def class_occurrences(self, sec, days=21) -> list:
+        """My upcoming classes with a section → [(date, entry)]."""
+        out, today = [], self.s.now().date()
+        items = self.mine((self.state.get(sec) or {}).get("entries", []))
+        for i in range(days):
+            d = today + timedelta(days=i)
+            for it in sorted((x for x in items if x["day"] == d.strftime("%A")), key=lambda x: _time_key(x["time"])):
+                out.append((d, it))
+        return out
+
+    def add_change(self, sec, day, entry, kind, new_date=None, new_time="", new_place="", note="") -> str:
+        import secrets
+        cid = secrets.token_hex(3)
+        self._changes()[cid] = {"sec": sec, "date": day.isoformat(), "course": entry["course"], "time": entry["time"],
+                                "room": entry["room"], "kind": kind, "new_date": new_date.isoformat() if new_date else "",
+                                "new_time": new_time, "new_place": new_place, "note": note,
+                                "created": self.s.now_str()}
+        self.save_changes()
+        return cid
+
+    def change_text(self, c, for_new_day=False) -> str:
+        from datetime import date as _d
+        d = _d.fromisoformat(c["date"])
+        name = self._course_name(c["course"], True)
+        base = f"**{c['course']}** {name} · {d:%a %d %b} {c['time']}"
+        if c["kind"] == "cancel":
+            txt = f"🚫 **CANCELLED** — {base}"
+        elif c["kind"] == "online":
+            txt = f"💻 **ONLINE** — {base}" + (f" · join {c['new_place']}" if c.get("new_place") else "")
+        else:
+            nd = _d.fromisoformat(c["new_date"]) if c.get("new_date") else d
+            where = f" · {c['new_place']}" if c.get("new_place") else ""
+            if for_new_day:
+                txt = f"🔁 **MAKE-UP CLASS** — **{c['course']}** {name} · {nd:%a %d %b} {c.get('new_time') or c['time']}{where}"
+            else:
+                txt = (f"🔁 **RESCHEDULED** — {base} → **{nd:%a %d %b} {c.get('new_time') or c['time']}**{where}")
+        if c.get("note"):
+            txt += f"\n   _{c['note'][:150]}_"
+        return txt
+
+    def changes_on(self, sec, day) -> list:
+        iso = day.isoformat()
+        out = []
+        for c in self._changes().values():
+            if sec and c["sec"] != sec:
+                continue
+            pre = f"{c['sec']} · " if not sec else ""
+            if c["date"] == iso:
+                out.append(pre + self.change_text(c))
+            if c.get("new_date") == iso and c["kind"] == "reschedule":
+                out.append(pre + self.change_text(c, True))
+        return out
+
+    async def announce_change(self, cid) -> bool:
+        c = self._changes()[cid]
+        ch = self.bot.channel_for(f"sec:{c['sec']}:announcement")
+        if ch is None:
+            return False
+        role = self.bot.role_for(f"role:sec:{c['sec']}")
+        color = {"cancel": discord.Color.red(), "online": discord.Color.blue()}.get(c["kind"], discord.Color.orange())
+        title = {"cancel": "🚫 Class cancelled", "online": "💻 Class will be ONLINE"}.get(c["kind"], "🔁 Class rescheduled")
+        emb = discord.Embed(title=title, description=self.change_text(c), color=color)
+        emb.set_footer(text=f"{self.s.teacher} · Section {c['sec']} · also shown under 📅 in 🗓️┃routine-and-deadlines")
+        try:
+            await ch.send(content=role.mention if role else None, embed=emb,
+                          allowed_mentions=discord.AllowedMentions(roles=True))
+            return True
+        except discord.HTTPException:
+            return False
+
     # ---- online class place + reminders
     def event_place(self, ev, sec):
         """Channel where an online class happens: chosen channel, else the section's voice channel."""
@@ -767,6 +850,9 @@ class Routine(commands.Cog):
             e.description += self._ansi_grid(items, [("Time", 15, "time"), ("Room", 13, "room"), ("Course", 9, "course"),
                                                     ("Fac", 5, "teacher")], group_day=False)
             e.description += "\n" + self._course_legend(items)
+        chg = self.changes_on(sec, (self.s.now() + timedelta(days=offset)).date())
+        if chg:
+            e.add_field(name="⚠️ Class changes", value="\n".join(chg)[:1024], inline=False)
         self.add_event_fields(e, sec, offset)
         e.set_footer(text=f"Yellow {self.teacher} = class with {self.teacher} · green room = lab · only you can see this")
         return e
@@ -935,11 +1021,17 @@ class Routine(commands.Cog):
                           color=discord.Color.gold(), timestamp=self.s.now())
         if not items:
             e.description += "\n🎉 No classes."
+            chg = self.changes_on(None, (self.s.now() + timedelta(days=offset)).date())
+            if chg:
+                e.add_field(name="⚠️ Class changes", value="\n".join(chg)[:1024], inline=False)
             self.add_event_fields(e, None, offset, show_sections=True)
             return e
         e.description += self._ansi_grid(items, [("Time", 15, "time"), ("Sec", 4, "section"), ("Room", 13, "room"),
                                                 ("Course", 9, "course")], group_day=False)
         e.description += "\n" + self._course_legend(items)
+        chg = self.changes_on(None, (self.s.now() + timedelta(days=offset)).date())
+        if chg:
+            e.add_field(name="⚠️ Class changes", value="\n".join(chg)[:1024], inline=False)
         self.add_event_fields(e, None, offset, show_sections=True)
         e.set_footer(text=f"{len(items)} class(es) · from the official routine")
         return e

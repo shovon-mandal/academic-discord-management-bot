@@ -93,11 +93,71 @@ class Draft:
         self.buttons: list = []      # (label, url)
         self.files: list = []        # (filename, bytes)
         self.linkbuttons = False     # every link in the text → a button (link shown under it)
+        self.expire = ""             # auto-delete: "today", "3h", "2d" … ("" = keep)
 
 
 class Poster(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        from discord.ext import tasks
+        self.cleaner = tasks.loop(minutes=5)(self._clean_expired)
+
+    async def cog_load(self):
+        self.cleaner.start()
+
+    async def cog_unload(self):
+        self.cleaner.cancel()
+
+    EXP_FILE = None
+
+    def _exp_path(self):
+        from core.config import DATA_DIR
+        return DATA_DIR / "expiring_posts.json"
+
+    def expire_at(self, text: str):
+        """'today' → 23:59 today · '3h' / '45m' / '2d' → from now · '' → None."""
+        from datetime import timedelta
+        t = (text or "").strip().lower()
+        now = self.bot.settings.now()
+        if not t or t in ("no", "never", "-"):
+            return None
+        if t in ("today", "aj", "end of today"):
+            return now.replace(hour=23, minute=59, second=0, microsecond=0)
+        if t in ("tomorrow", "kal"):
+            return (now + timedelta(days=1)).replace(hour=23, minute=59, second=0, microsecond=0)
+        m = re.fullmatch(r"(\d+)\s*([mhd])", t)
+        if m:
+            n, u = int(m.group(1)), m.group(2)
+            return now + (timedelta(minutes=n) if u == "m" else timedelta(hours=n) if u == "h" else timedelta(days=n))
+        return None
+
+    def remember_expiry(self, msgs: list, at):
+        from core.storage import load_json, save_json
+        data = load_json(self._exp_path(), [])
+        data += [{"ch": m.channel.id, "msg": m.id, "at": at.isoformat()} for m in msgs]
+        save_json(self._exp_path(), data)
+
+    async def _clean_expired(self):
+        from datetime import datetime as _dt
+        from core.storage import load_json, save_json
+        await self.bot.wait_until_ready()
+        data = load_json(self._exp_path(), [])
+        if not data:
+            return
+        now, keep = self.bot.settings.now(), []
+        for it in data:
+            if _dt.fromisoformat(it["at"]) > now:
+                keep.append(it)
+                continue
+            ch = self.bot.get_channel(int(it["ch"]))
+            try:
+                if ch:
+                    await ch.get_partial_message(int(it["msg"])).delete()
+            except discord.NotFound:
+                pass
+            except discord.HTTPException:
+                keep.append(it)
+        save_json(self._exp_path(), keep)
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -264,6 +324,8 @@ class Poster(commands.Cog):
 
     async def post(self, d: Draft, guild, who) -> str:
         ok, bad = [], []
+        exp = self.expire_at(d.expire)
+        sent_msgs = []
         for cid in d.channels:
             ch = guild.get_channel(cid)
             if ch is None:
@@ -271,9 +333,14 @@ class Poster(commands.Cog):
             try:
                 msg = await self.send_to(d, ch)
                 ok.append(f"[#{ch.name}]({msg.jump_url})" if msg else f"#{ch.name}")
+                if msg:
+                    sent_msgs.append(msg)
             except discord.HTTPException as e:
                 bad.append(f"#{ch.name} ({e.text or e.status})")
         summary = (f"✅ Posted in **{len(ok)}** channel(s): " + ", ".join(ok)) if ok else "❌ Nothing was posted."
+        if exp and sent_msgs:
+            self.remember_expiry(sent_msgs, exp)
+            summary += f"\n🧹 Will be deleted automatically on **{exp:%d %b, %I:%M %p}**."
         if bad:
             summary += "\n⚠️ Failed: " + ", ".join(bad)
         await self.bot.send_log("📤 Posted as bot", f"by {who.mention}\n{summary}\n"
@@ -293,6 +360,11 @@ class Poster(commands.Cog):
                     mt, _ = self._mentions(d, c)
                     lines.append(f"   • {c.mention} → {mt or '*(nobody — no selected role can see it)*'}")
         nlinks = len(self.LINK_RE.findall(d.text or "")) if d.linkbuttons else 0
+        exp = self.expire_at(d.expire)
+        if exp:
+            lines.append(f"🧹 Auto-delete: **{exp:%d %b, %I:%M %p}**")
+        elif d.expire:
+            lines.append(f"⚠️ Could not read auto-delete `{d.expire}` — use today / tomorrow / 3h / 2d (it will be kept).")
         lines.append(f"🎨 Style: **{'Card' if d.style == 'card' else 'Plain message'}"
                      f"{' + link buttons' if d.linkbuttons else ''}** · 📎 Files: **{len(d.files)}** · "
                      f"🔗 Buttons: **{len(d.buttons) + nlinks}**")
@@ -507,12 +579,18 @@ class PostModal(discord.ui.Modal):
         self.add_item(discord.ui.Label(text="Files (optional, up to 10)", component=self.files_in))
         self.add_item(discord.ui.Label(text="Link buttons (optional)", description="One per line:  Label | link",
                                        component=self.btn_in))
+        self.exp_in = discord.ui.TextInput(style=discord.TextStyle.short, required=False, max_length=20,
+                                           default=d.expire or None, placeholder="today · tomorrow · 3h · 2d  (empty = keep)")
+        self.add_item(discord.ui.Label(text="Auto-delete the notice? (optional)",
+                                       description="For short-lived notices (room change, today only…)",
+                                       component=self.exp_in))
 
     async def on_submit(self, interaction: discord.Interaction):
         d = self.d
         d.title = (self.title_in.value or "").strip()
         d.text, inline = parse_buttons(self.text_in.value or "")
         lines, bad = parse_button_lines(self.btn_in.value or "")
+        d.expire = (self.exp_in.value or "").strip()
         d.buttons = (inline + lines)[:25]
         await interaction.response.defer(ephemeral=True, thinking=True)
         new_files = []

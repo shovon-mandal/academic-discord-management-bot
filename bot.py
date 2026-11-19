@@ -38,6 +38,7 @@ EXTENSIONS = (
     "cogs.routine",
     "cogs.poster",
     "cogs.submissions",
+    "cogs.semester",
 )
 
 log = logging.getLogger("nubtk")

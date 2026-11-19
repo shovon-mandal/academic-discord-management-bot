@@ -496,6 +496,177 @@ class EventsListMenu(BaseMenu):
         await interaction.response.edit_message(content="🗑️ Deleted.", view=None, embed=None)
 
 
+class DashMenu(BaseMenu):
+    def __init__(self, cog, user_id):
+        super().__init__(cog, user_id)
+        opts = [discord.SelectOption(label="All sections", value="all", emoji="🏫")] + section_options(cog.s)
+        sel = discord.ui.Select(placeholder="Section…", options=opts[:25])
+        sel.callback = self._go
+        self.add_item(sel)
+
+    async def _go(self, interaction):
+        v = interaction.data["values"][0]
+        secs = list(self.cog.s.sections) if v == "all" else [v]
+        sem = self.cog.bot.get_cog("Semester")
+        await interaction.response.defer(ephemeral=True)
+        for i in range(0, len(secs), 10):
+            await interaction.followup.send(embeds=[sem.dashboard(x) for x in secs[i:i + 10]], ephemeral=True)
+
+
+class NewSemesterModal(discord.ui.Modal):
+    def __init__(self, cog):
+        super().__init__(title="🆕 New semester — are you sure?", timeout=600)
+        self.cog = cog
+        self.confirm = discord.ui.TextInput(
+            label="Type NEW SEMESTER to continue", max_length=20,
+            placeholder="Archive → clear students, deadlines, attendance → remove student roles")
+        self.add_item(self.confirm)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if self.confirm.value.strip().upper() != "NEW SEMESTER":
+            await interaction.response.send_message("❎ Cancelled — nothing changed.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        sem = self.cog.bot.get_cog("Semester")
+
+        async def report(t):
+            try:
+                await interaction.edit_original_response(content=t[:1990])
+            except discord.HTTPException:
+                pass
+        text = await sem.new_semester(report)
+        await interaction.followup.send(text, ephemeral=True)
+        await self.cog.bot.send_log("🆕 New semester", text + f"\nby {interaction.user.mention}")
+
+
+class ClassChangeMenu(BaseMenu):
+    """🚫 Cancel / 🔁 reschedule / 💻 make online one of my classes."""
+    ACTIONS = [("cancel", "Cancel the class", "🚫"), ("reschedule", "Reschedule (new date / time / room)", "🔁"),
+               ("online", "Take it online", "💻")]
+
+    def __init__(self, cog, user_id):
+        super().__init__(cog, user_id)
+        self.sec = None
+        self.occ = None      # (date, entry)
+        self.action = "cancel"
+        self._build()
+
+    def _build(self):
+        self.clear_items()
+        r = self.cog.bot.get_cog("Routine")
+        so = section_options(self.cog.s)
+        for o in so:
+            o.default = o.value == self.sec
+        ss = discord.ui.Select(placeholder="1️⃣ Section", options=so, row=0)
+        ss.callback = self._sec
+        self.add_item(ss)
+        occ = r.class_occurrences(self.sec) if self.sec else []
+        self._occ = occ[:25]
+        if self._occ:
+            os_ = discord.ui.Select(placeholder="2️⃣ Which class?", row=1, options=[
+                discord.SelectOption(label=f"{d:%a %d %b} · {it['time']} · {it['course']}"[:100], value=str(i),
+                                     description=f"Room {it['room']} · {r._course_name(it['course'], True)}"[:100],
+                                     emoji="🏫", default=(self.occ is not None and self.occ == (d, it)))
+                for i, (d, it) in enumerate(self._occ)])
+        else:
+            os_ = discord.ui.Select(placeholder="2️⃣ Your classes appear after you choose a section", row=1,
+                                    disabled=True, options=[discord.SelectOption(label="—", value="x")])
+        os_.callback = self._occ_pick
+        self.add_item(os_)
+        ac = discord.ui.Select(placeholder="3️⃣ What to do?", row=2, options=[
+            discord.SelectOption(label=l, value=v, emoji=e, default=v == self.action) for v, l, e in self.ACTIONS])
+        ac.callback = self._act
+        self.add_item(ac)
+        chg = sorted(r._changes().items(), key=lambda x: x[1]["date"])[:25]
+        if chg:
+            un = discord.ui.Select(placeholder="↩️ Undo a change (delete it)…", row=3, options=[
+                discord.SelectOption(label=f"{c['sec']} · {c['date']} · {c['kind']} · {c['course']}"[:100], value=k)
+                for k, c in chg])
+            un.callback = self._undo
+            self.add_item(un)
+        go = discord.ui.Button(label="4️⃣ Details & announce", emoji="📢", style=discord.ButtonStyle.success, row=4)
+        go.callback = self._go
+        self.add_item(go)
+
+    async def _sec(self, i):
+        self.sec = i.data["values"][0]
+        self.occ = None
+        self._build()
+        await i.response.edit_message(view=self)
+
+    async def _occ_pick(self, i):
+        self.occ = self._occ[int(i.data["values"][0])]
+        await i.response.defer()
+
+    async def _act(self, i):
+        self.action = i.data["values"][0]
+        await i.response.defer()
+
+    async def _undo(self, i):
+        r = self.cog.bot.get_cog("Routine")
+        r._changes().pop(i.data["values"][0], None)
+        r.save_changes()
+        self._build()
+        await i.response.edit_message(content="↩️ Change removed (students' 📅 views are back to normal). "
+                                              "Post a short notice if you had announced it.", view=self)
+
+    async def _go(self, i):
+        if not self.occ:
+            await i.response.send_message("Choose the section and the class first.", ephemeral=True)
+            return
+        await i.response.send_modal(ClassChangeModal(self.cog, self.sec, self.occ, self.action, i))
+
+
+class ClassChangeModal(discord.ui.Modal):
+    def __init__(self, cog, sec, occ, action, menu):
+        title = {"cancel": "🚫 Cancel class", "online": "💻 Online class", "reschedule": "🔁 Reschedule class"}[action]
+        super().__init__(title=f"{title} · {sec}"[:45], timeout=900)
+        self.cog, self.sec, self.occ, self.action, self.menu = cog, sec, occ, action, menu
+        self.new = None
+        self.place = None
+        if action == "reschedule":
+            self.new = discord.ui.TextInput(label="New date + time", max_length=40,
+                                            placeholder="2026-11-28 10:30 AM   (date only = same time)")
+            self.place = discord.ui.TextInput(label="Room / place (optional)", required=False, max_length=80,
+                                              placeholder="Room 305  ·  Online")
+        elif action == "online":
+            vc = cog.bot.channel_for(f"sec:{sec}:voice_class")
+            self.place = discord.ui.TextInput(label="Where? (channel or meeting link)", required=False, max_length=200,
+                                              default=vc.mention if vc else None,
+                                              placeholder="https://meet.google.com/...")
+        self.note = discord.ui.TextInput(label="Note for students (optional)", required=False, max_length=300,
+                                         style=discord.TextStyle.paragraph,
+                                         placeholder="e.g. Make-up class will be announced · Bring your laptop")
+        self.ann = discord.ui.TextInput(label="Announce now? (yes / no)", default="yes", max_length=3, required=False)
+        for x in (self.new, self.place, self.note, self.ann):
+            if x is not None:
+                self.add_item(x)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        r = self.cog.bot.get_cog("Routine")
+        d, it = self.occ
+        new_date, new_time = None, ""
+        if self.action == "reschedule":
+            got = self.cog.parse_event_date(self.new.value)
+            if not got:
+                await interaction.response.send_message("⚠️ Write the new date, e.g. `2026-11-28 10:30 AM`.",
+                                                        ephemeral=True)
+                return
+            new_date = got[0]
+            if got[1]:
+                h, m = got[1]
+                new_time = f"{(h % 12) or 12:02d}:{m:02d} {'AM' if h < 12 else 'PM'}"
+        place = (self.place.value or "").strip() if self.place else ""
+        cid = r.add_change(self.sec, d, it, self.action, new_date, new_time, place, (self.note.value or "").strip())
+        ok = False
+        if (self.ann.value or "yes").strip().lower().startswith("y"):
+            ok = await r.announce_change(cid)
+        await interaction.response.send_message(
+            "✅ Saved: " + r.change_text(r._changes()[cid]) + ("\n📢 Announced in the section." if ok else "")
+            + "\nStudents see it under 📅 Today / Tomorrow in 🗓️┃routine-and-deadlines.", ephemeral=True)
+        await done(self.menu, "✅ Class change saved.")
+
+
 class ReminderTimeModal(discord.ui.Modal):
     def __init__(self, cog, eid):
         super().__init__(title="⏰ Schedule a reminder", timeout=900)
@@ -945,7 +1116,13 @@ PANEL_GROUPS = [
         ("event_list", "Edit / delete / remind", "📋", B.secondary, "Upcoming deadlines, tests, online classes → ✏️ edit · 🗑️ delete · 🔔 send a reminder now."),
         ("subs", "Submission list", "📝", B.primary, "Google Sheet / Form link → who submitted (ID, name, time) → each section's list in its own channel."),
     ]),
-    ("Row 8 · 📖 Help", discord.Color.teal(), [
+    ("Row 8 · 🏫 Section & semester", discord.Color.dark_teal(), [
+        ("dash", "Section dashboard", "📊", B.primary, "One look: students, next classes, deadlines, changes, attendance, submissions."),
+        ("class_change", "Cancel / reschedule class", "🚫", B.danger, "Cancel · move to another day/time/room · take online → announced + shown in 📅."),
+        ("archive", "Semester archive", "🗂️", B.secondary, "ZIP of all data + students Excel + every section channel's posts."),
+        ("new_semester", "New semester", "🆕", B.danger, "Archive → clear students/deadlines/attendance → remove student roles (asks first)."),
+    ]),
+    ("Row 9 · 📖 Help", discord.Color.teal(), [
         ("allcmds", "All commands", "📖", B.primary, "Every text command with an example."),
         ("panel", "Show panel here", "🎛️", B.secondary, "Open this whole panel privately, anywhere."),
     ]),
@@ -1098,6 +1275,25 @@ class Panel(commands.Cog):
 
         if key == "panel":
             await self.send_panel_private(interaction)
+            return
+        if key == "dash":
+            await menu(DashMenu(self, uid), "📊 **Section dashboard** — choose a section (or all).")
+            return
+        if key == "class_change":
+            await menu(ClassChangeMenu(self, uid), "🚫 **Cancel / reschedule / online** — section → class → action → "
+                                                    "📢 Details & announce.\nStudents also see it in 📅 Today / Tomorrow.")
+            return
+        if key == "archive":
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            sem = self.bot.get_cog("Semester")
+
+            async def rep_(t):
+                pass
+            await sem.send_archive(rep_)
+            await interaction.followup.send("🗂️ Archive posted in the admin channel.", ephemeral=True)
+            return
+        if key == "new_semester":
+            await interaction.response.send_modal(NewSemesterModal(self))
             return
         if key == "subs":
             from cogs.submissions import SubModal
