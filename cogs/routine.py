@@ -769,6 +769,21 @@ class Routine(commands.Cog):
         self.save_events()
         return sent
 
+    def add_custom_reminder(self, eid, at, secs=None):
+        ev = self._events()[eid]
+        ev.setdefault("custom_reminders", []).append({"at": at.isoformat(timespec="minutes"), "secs": secs or [],
+                                                     "done": False})
+        self.save_events()
+
+    def reminder_lines(self, ev) -> str:
+        out = []
+        for sec in self.expand_secs(ev["sections"])[:1]:
+            due = self.reminder_due(ev, sec)
+            out.append(f"auto {due:%d %b %I:%M %p}" + (" ✅" if sec in (ev.get("auto_reminded") or []) else ""))
+        for rem in ev.get("custom_reminders") or []:
+            out.append(f"{_dt_fromiso(rem['at']):%d %b %I:%M %p}" + (" ✅" if rem.get("done") else ""))
+        return " · ".join(out)
+
     async def _reminder_tick(self):
         await self.bot.wait_until_ready()
         now = self.s.now()

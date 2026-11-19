@@ -405,8 +405,8 @@ class Verification(commands.Cog):
         if not rec:
             return False, "This member is not verified."
         extras = [x for x in (rec.get("extra_sections") or []) if x not in secs]
-        roles = [r for r in (self.bot.role_for(f"role:sec:{x}") for x in secs) if r and r in member.roles
-                 and x != rec["section"]]
+        roles = [r for r in (self.bot.role_for(f"role:sec:{x}") for x in secs if x != rec["section"])
+                 if r and r in member.roles]
         try:
             if roles:
                 await member.remove_roles(*roles, reason=f"Extra section removed ({by})")
