@@ -469,6 +469,12 @@ class EventsListMenu(BaseMenu):
             rm = discord.ui.Select(placeholder="🔔 Send a reminder NOW for…", options=opts(), row=2)
             rm.callback = self._remind
             self.add_item(rm)
+            sch = discord.ui.Select(placeholder="⏰ Schedule a reminder at MY time for…", options=opts(), row=3)
+            sch.callback = self._schedule
+            self.add_item(sch)
+
+    async def _schedule(self, interaction):
+        await interaction.response.send_modal(ReminderTimeModal(self.cog, interaction.data["values"][0]))
 
     async def _remind(self, interaction):
         r = self.cog.bot.get_cog("Routine")
@@ -488,6 +494,42 @@ class EventsListMenu(BaseMenu):
             r._events().pop(eid, None)
         r.save_events()
         await interaction.response.edit_message(content="🗑️ Deleted.", view=None, embed=None)
+
+
+class ReminderTimeModal(discord.ui.Modal):
+    def __init__(self, cog, eid):
+        super().__init__(title="⏰ Schedule a reminder", timeout=900)
+        self.cog, self.eid = cog, eid
+        self.at = discord.ui.TextInput(label="When? (date + time, or +2h / +30m)", max_length=40,
+                                       placeholder="2026-11-24 17:00   ·   24/11 5:00 PM   ·   +2h")
+        self.secs = discord.ui.TextInput(label="Only some sections? (empty = all)", required=False, max_length=60,
+                                         placeholder="e.g. 3D 3E")
+        self.add_item(self.at)
+        self.add_item(self.secs)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        r = self.cog.bot.get_cog("Routine")
+        raw = self.at.value.strip()
+        at = None
+        if raw.startswith("+"):
+            at = self.cog.parse_when(raw)
+        else:
+            got = self.cog.parse_event_date(raw)
+            if got and got[1]:
+                d, (h, m) = got[0], got[1]
+                at = datetime(d.year, d.month, d.day, h, m, tzinfo=self.cog.s.tz)
+            elif not got:
+                at = self.cog.parse_when(raw)  # e.g. just "17:00" → today/tomorrow
+        if not at or at <= self.cog.s.now():
+            await interaction.response.send_message("⚠️ Write a future date + time, e.g. `2026-11-24 17:00` or `+2h`.",
+                                                    ephemeral=True)
+            return
+        secs = [x for x in (self.cog.s.normalize_section(w) for w in (self.secs.value or "").replace(",", " ").split()) if x]
+        r.add_custom_reminder(self.eid, at, secs)
+        ev = r._events()[self.eid]
+        await interaction.response.send_message(
+            f"⏰ Reminder scheduled for **{at:%a %d %b, %I:%M %p}** → {', '.join(secs) or 'all its sections'}\n"
+            f"Reminders for **{ev['title']}**: {r.reminder_lines(ev)}", ephemeral=True)
 
 
 class EventEditModal(discord.ui.Modal):
@@ -1100,7 +1142,8 @@ class Panel(commands.Cog):
             r = self.bot.get_cog("Routine")
             now = self.s.now()
             items = r.events_between(None, now - timedelta(hours=1), now + timedelta(days=60))
-            text = ("📌 **Upcoming deadlines & tests**\n" + "\n".join(r.event_line(w, ev, True) for w, _, ev in items)
+            text = ("📌 **Upcoming deadlines & tests**\n" + "\n".join(r.event_line(w, ev, True) + f"\n   ⏰ {r.reminder_lines(ev)}"
+                                                                    for w, _, ev in items)
                     if items else "No upcoming deadlines or tests.")
             await menu(EventsListMenu(self, uid, items), text[:1990])
             return
