@@ -36,6 +36,12 @@ MENTION_MODES = [
 ]
 
 
+def ch_label(c) -> str:
+    """#channel (Category) — same-named channels in different sections are easy to tell apart."""
+    cat = c.category.name if getattr(c, "category", None) else ""
+    return f"{c.mention} ({cat})" if cat else c.mention
+
+
 def parse_buttons(text: str) -> tuple:
     """→ (clean_text, [(label, url)]) — takes [[Label | url]] out of the text."""
     btns = [(m.group(1)[:80], m.group(2)) for m in INLINE_BTN.finditer(text or "")]
@@ -332,7 +338,8 @@ class Poster(commands.Cog):
                 continue
             try:
                 msg = await self.send_to(d, ch)
-                ok.append(f"[#{ch.name}]({msg.jump_url})" if msg else f"#{ch.name}")
+                cat = f" ({ch.category.name})" if ch.category else ""
+                ok.append(f"[#{ch.name}{cat}]({msg.jump_url})" if msg else f"#{ch.name}{cat}")
                 if msg:
                     sent_msgs.append(msg)
             except discord.HTTPException as e:
@@ -352,13 +359,13 @@ class Poster(commands.Cog):
         chans = [guild.get_channel(c) for c in d.channels]
         chans = [c for c in chans if c]
         lines = ["👀 **Preview** — only you see this. Nothing is posted yet.",
-                 f"📍 Channels ({len(chans)}): " + ", ".join(c.mention for c in chans)]
+                 f"📍 Channels ({len(chans)}): " + ", ".join(ch_label(c) for c in chans)]
         if chans:
             lines.append(f"🔔 Mention: **{dict((m[0], m[1]) for m in MENTION_MODES)[d.mention]}**")
             if d.mention != "none":
                 for c in chans[:15]:
                     mt, _ = self._mentions(d, c)
-                    lines.append(f"   • {c.mention} → {mt or '*(nobody — no selected role can see it)*'}")
+                    lines.append(f"   • {ch_label(c)} → {mt or '*(nobody — no selected role can see it)*'}")
         nlinks = len(self.LINK_RE.findall(d.text or "")) if d.linkbuttons else 0
         exp = self.expire_at(d.expire)
         if exp:
@@ -503,7 +510,7 @@ class PostMenu(_Owned):
                  "1️⃣ Role(s) → 2️⃣ channel(s) they can see → 3️⃣ mention → 4️⃣ style → **✍️ Write**",
                  f"🏷️ Roles: {', '.join(r.mention for r in roles) or '—'}"]
         chans = [c for c in (g.get_channel(x) for x in self.d.channels) if c] if g else []
-        lines.append(f"📍 Channels ({len(chans)}): " + (", ".join(c.mention for c in chans[:30]) or "—"))
+        lines.append(f"📍 Channels ({len(chans)}): " + (", ".join(ch_label(c) for c in chans[:30]) or "—"))
         return "\n".join(lines)
 
     async def _roles(self, i):

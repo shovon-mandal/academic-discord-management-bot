@@ -397,8 +397,10 @@ class EventMenu(BaseMenu):
         ds.callback = self._date
         self.add_item(ds)
         if self.kind != "online":
+            secs_txt = ", ".join(r.expand_secs(self.secs)) or "each chosen section"
             tg = discord.ui.Select(placeholder="📍 Post it in…", row=3, options=[
-                discord.SelectOption(label=name, value=key, default=key == self.target)
+                discord.SelectOption(label=name, value=key, default=key == self.target,
+                                     description=f"in the category of: {secs_txt}"[:100])
                 for key, name in r.target_options()][:25])
             tg.callback = self._target
             self.add_item(tg)
@@ -459,22 +461,29 @@ class EventModal(discord.ui.Modal):
         self.target = target
         self.head = discord.ui.TextInput(label="Title", max_length=100, placeholder="e.g. Assignment 2 — Inheritance"
                                          if kind != "online" else "e.g. OOP II — Polymorphism (online)")
-        self.when = discord.ui.TextInput(label="Date (time optional → class time)", max_length=60,
-                                         default=day.isoformat() if day else None,
-                                         placeholder="2026-11-25 · or 2026-11-25 23:59 · or 2026-11-25 3D=08:30 3E=10:30")
+        self.when = discord.ui.TextInput(label="Date", max_length=30, default=day.isoformat() if day else None,
+                                         placeholder="2026-11-26  (or 26/11)")
+        self.time = discord.ui.TextInput(label="Time (empty = each section's class time)", required=False,
+                                         max_length=60,
+                                         placeholder="11:59 PM  ·  23:59  ·  3D=09:00 3E=14:30")
         self.details = discord.ui.TextInput(label="Details (optional)", required=False, max_length=600,
                                             style=discord.TextStyle.paragraph,
                                             placeholder="Syllabus: Chapter 3–4 · Submit PDF in general-text")
         self.announce = discord.ui.TextInput(label="Announce now in the section? (yes / no)", default="yes",
                                              max_length=3, required=False)
-        for x in (self.head, self.when, self.details, self.announce):
+        for x in (self.head, self.when, self.time, self.details, self.announce):
             self.add_item(x)
 
     async def on_submit(self, interaction: discord.Interaction):
-        got = self.cog.parse_event_date(self.when.value)
+        tm = (self.time.value or "").strip()
+        got = self.cog.parse_event_date(f"{self.when.value.strip()} {tm}".strip())
         if not got:
-            await interaction.response.send_message("⚠️ Could not read the date. Use `2026-11-25` "
-                                                    "(+ optional time `23:59`).", ephemeral=True)
+            await interaction.response.send_message("⚠️ Could not read the date. Use `2026-11-26` or `26/11`.",
+                                                    ephemeral=True)
+            return
+        if tm and not got[1] and not got[2]:
+            await interaction.response.send_message(f"⚠️ Could not read the time `{tm}`. Use `11:59 PM`, `23:59` or "
+                                                    "`3D=09:00 3E=14:30` (or leave it empty).", ephemeral=True)
             return
         r = self.cog.bot.get_cog("Routine")
         when, times = r.resolve_when(self.secs, got[0], got[1], got[2])
