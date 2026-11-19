@@ -518,7 +518,7 @@ class EventsListMenu(BaseMenu):
             sch = discord.ui.Select(placeholder="⏰ Schedule a reminder at MY time for…", options=opts(), row=3)
             sch.callback = self._schedule
             self.add_item(sch)
-            mv = discord.ui.Select(placeholder="📍 Change the channel it is posted in…", options=opts(), row=4)
+            mv = discord.ui.Select(placeholder="📍 Change channel (post / online class voice channel)…", options=opts(), row=4)
             mv.callback = self._move
             self.add_item(mv)
 
@@ -738,6 +738,24 @@ class MoveTargetMenu(BaseMenu):
         b = discord.ui.Button(label="Only for next reminders", emoji="💾", style=discord.ButtonStyle.secondary)
         b.callback = self._save
         self.add_item(b)
+        if ev["kind"] == "online":
+            vc = discord.ui.ChannelSelect(placeholder="🔊 Change where the ONLINE CLASS happens (voice channel…)",
+                                          min_values=1, max_values=1, row=2,
+                                          channel_types=[discord.ChannelType.voice, discord.ChannelType.stage_voice,
+                                                         discord.ChannelType.text])
+            vc.callback = self._where
+            self.add_item(vc)
+
+    async def _where(self, i):
+        r = self.cog.bot.get_cog("Routine")
+        ev = r._events()[self.eid]
+        ev["where"] = int(i.data["values"][0])
+        ev["edited"] = self.cog.s.now_str()
+        r.save_events()
+        await i.response.defer()
+        fixed = await r.announce_event(self.eid, "edit")  # announcement + reminders show the new channel
+        await i.edit_original_response(content=f"🔊 Class channel changed to <#{ev['where']}>"
+                                       + (f" · announcement updated in: {', '.join(fixed)}" if fixed else ""), view=None)
 
     def text(self):
         ev = self.cog.bot.get_cog("Routine")._events()[self.eid]
