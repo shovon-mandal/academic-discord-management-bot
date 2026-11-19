@@ -431,6 +431,10 @@ class Poster(commands.Cog):
         v.stop()
         return v
 
+    def find_pending(self, kind, **match):
+        return [pid for pid, it in self._pv_load().items()
+                if it["kind"] == kind and all(it["data"].get(k) == v for k, v in match.items())]
+
     async def stage(self, kind: str, data: dict, header: discord.Embed, render, n_targets: int, by, files=None,
                     replace: str | None = None) -> str | None:
         """Post a PREVIEW in 🤖┃bot-test (header: where / who is mentioned + the message itself) with
@@ -456,6 +460,7 @@ class Poster(commands.Cog):
             await render(ch)
         except discord.HTTPException as e:
             await ch.send(f"⚠️ Preview problem: `{e.text or e}`")
+        allp = self._pv_load()  # reload: other previews may have changed while this one was being sent
         allp[pid] = {"kind": kind, "data": data, "by": getattr(by, "id", 0), "msg": [ch.id, msg.id],
                      "created": self.bot.settings.now_str()}
         self._pv_save(allp)
@@ -612,8 +617,16 @@ class Poster(commands.Cog):
             return
         _, _, action, pid = cid.split(":", 3)
         it = self._pv_load().get(pid)
-        if it is None:
-            await interaction.response.send_message("This preview is finished or was replaced.", ephemeral=True)
+        if it is None:  # already finished / replaced → just take the buttons away
+            try:
+                await interaction.response.edit_message(view=None)
+            except discord.HTTPException:
+                pass
+            try:
+                await interaction.followup.send("This preview was already finished or replaced — nothing more to do.",
+                                                ephemeral=True)
+            except discord.HTTPException:
+                pass
             return
         kind, data = it["kind"], it["data"]
         r = self.bot.get_cog("Routine")

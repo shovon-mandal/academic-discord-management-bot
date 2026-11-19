@@ -786,6 +786,9 @@ class Routine(commands.Cog):
         async def render(ch):
             await ch.send(content=(f"↪️ reply to: {main.jump_url}" if main else "") or None,
                           embed=self._reminder_embed(ev, sec, auto=(which == "auto")))
+        old = poster.find_pending("rem_ok", eid=eid, which=which)
+        if old:
+            return True  # already waiting for your answer — no duplicates
         pid = await poster.gate("rem_ok", {"eid": eid, "which": which}, f"{kind_txt} · {ev['title']}", info, render,
                                 len(secs), None)
         return bool(pid)
@@ -887,47 +890,50 @@ class Routine(commands.Cog):
         now = self.s.now()
         changed = False
         for eid, ev in list(self._events().items()):
-            done_ = set(ev.get("auto_reminded") or [])
-            ready = ev.get("msgs") or ev.get("no_announce") or "created_at" not in ev
-            if ev.get("auto_ok") is None and not ev.get("auto_staged") and ready and self.event_when(ev) > now:
-                if await self.stage_reminder_approval(eid, "auto"):
-                    ev["auto_staged"] = True
-                    changed = True
-            for sec in self.expand_secs(ev["sections"]):
-                if sec in done_:
-                    continue
-                due, w = self.reminder_due(ev, sec), self.event_when(ev, sec)
-                if due <= now < w and ev.get("auto_ok") is not True:
-                    done_.add(sec)  # not approved in time → not sent (nothing goes out without a preview)
-                    changed = True
-                    continue
-                if due <= now < w:
-                    created = ev.get("created_at")
-                    if created and created > due.isoformat() and ev["kind"] != "online":
-                        done_.add(sec)  # added after the reminder time — the announcement is enough
-                    else:
-                        await self.send_reminder(eid, [sec], auto=True)
-                        done_.add(sec)
-                    changed = True
-            ev["auto_reminded"] = sorted(done_)
-            for idx, rem in enumerate(ev.get("custom_reminders") or []):  # reminders scheduled by hand
-                if rem.get("done"):
-                    continue
-                if rem.get("ok") is None and not rem.get("staged"):
-                    if await self.stage_reminder_approval(eid, idx):
-                        rem["staged"] = True
+            try:
+                done_ = set(ev.get("auto_reminded") or [])
+                ready = ev.get("msgs") or ev.get("no_announce") or "created_at" not in ev
+                if ev.get("auto_ok") is None and not ev.get("auto_staged") and ready and self.event_when(ev) > now:
+                    if await self.stage_reminder_approval(eid, "auto"):
+                        ev["auto_staged"] = True
+                        self.save_events()
+                for sec in self.expand_secs(ev["sections"]):
+                    if sec in done_:
+                        continue
+                    due, w = self.reminder_due(ev, sec), self.event_when(ev, sec)
+                    if due <= now < w and ev.get("auto_ok") is not True:
+                        done_.add(sec)  # not approved in time → not sent (nothing goes out without a preview)
                         changed = True
-                if rem.get("ok") is not True:
-                    if _dt_fromiso(rem["at"]) <= now:
-                        rem["done"] = True  # not approved → not sent
+                        continue
+                    if due <= now < w:
+                        created = ev.get("created_at")
+                        if created and created > due.isoformat() and ev["kind"] != "online":
+                            done_.add(sec)  # added after the reminder time — the announcement is enough
+                        else:
+                            await self.send_reminder(eid, [sec], auto=True)
+                            done_.add(sec)
                         changed = True
-                    continue
-                at = _dt_fromiso(rem["at"])
-                if at <= now:
-                    if now - at < timedelta(hours=6):
-                        await self.send_reminder(eid, rem.get("secs") or None)
-                    rem["done"] = True
-                    changed = True
+                ev["auto_reminded"] = sorted(done_)
+                for idx, rem in enumerate(ev.get("custom_reminders") or []):  # reminders scheduled by hand
+                    if rem.get("done"):
+                        continue
+                    if rem.get("ok") is None and not rem.get("staged"):
+                        if await self.stage_reminder_approval(eid, idx):
+                            rem["staged"] = True
+                            self.save_events()
+                    if rem.get("ok") is not True:
+                        if _dt_fromiso(rem["at"]) <= now:
+                            rem["done"] = True  # not approved → not sent
+                            changed = True
+                        continue
+                    at = _dt_fromiso(rem["at"])
+                    if at <= now:
+                        if now - at < timedelta(hours=6):
+                            await self.send_reminder(eid, rem.get("secs") or None)
+                        rem["done"] = True
+                        changed = True
+            except Exception:  # one broken item must not stop the others
+                log.exception("reminder tick failed for %s", eid)
         if changed:
             self.save_events()
 
