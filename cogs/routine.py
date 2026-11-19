@@ -475,20 +475,70 @@ class Routine(commands.Cog):
     def save_events(self):
         save_json(EVENTS_FILE, self._events())
 
-    def add_event(self, kind, title, sections, when, details, by) -> str:
+    def add_event(self, kind, title, sections, when, details, by, times=None) -> str:
         import secrets
         eid = secrets.token_hex(3)
         self._events()[eid] = {"kind": kind, "title": title, "sections": sections, "when": when.isoformat(timespec="minutes"),
-                               "details": details, "by": by, "created": self.s.now_str()}
+                               "times": times or {}, "details": details, "by": by, "created": self.s.now_str()}
         self.save_events()
         return eid
 
+    # ---- class times from the routine (for deadlines / tests on a class day)
+    def class_start(self, sec, day):
+        """Start time (hour, minute) of the first class with me for `sec` on that date, or None."""
+        items = self.mine((self.state.get(sec) or {}).get("entries", []))
+        wd = day.strftime("%A")
+        starts = sorted(_time_key(x["time"]) for x in items if x["day"] == wd)
+        starts = [k for k in starts if k < 9999]
+        return divmod(starts[0], 60) if starts else None
+
+    def expand_secs(self, secs):
+        return list(self.s.sections) if "all" in secs else [x for x in secs if x in self.s.sections]
+
+    def class_suggestions(self, secs, days=28) -> list:
+        """Upcoming dates when I have a class with these sections → [(date, label)]."""
+        from datetime import timedelta
+        out, today = [], self.s.now().date()
+        for i in range(0, days):
+            d = today + timedelta(days=i)
+            parts = []
+            for sec in self.expand_secs(secs):
+                st = self.class_start(sec, d)
+                if st:
+                    parts.append(f"{sec} {(st[0] % 12) or 12}:{st[1]:02d} {'AM' if st[0] < 12 else 'PM'}")
+            if parts:
+                out.append((d, f"{d:%a %d %b}" + (" (today)" if i == 0 else "") + " · " + ", ".join(parts)))
+        return out[:25]
+
+    def resolve_when(self, secs, day, hm=None, per_sec=None):
+        """→ (earliest datetime, {sec: 'HH:MM'}). hm = one time for all; else each section's class time
+        (per_sec overrides), else 23:59."""
+        from datetime import datetime as _dt
+        times = {}
+        for sec in self.expand_secs(secs):
+            t = (per_sec or {}).get(sec) or hm or self.class_start(sec, day) or (23, 59)
+            times[sec] = f"{t[0]:02d}:{t[1]:02d}"
+        if not times:
+            t = hm or (23, 59)
+            times = {"*": f"{t[0]:02d}:{t[1]:02d}"}
+        first = min(times.values())
+        h, m = map(int, first.split(":"))
+        return _dt(day.year, day.month, day.day, h, m, tzinfo=self.s.tz), times
+
+    def event_when(self, ev, sec=None):
+        from datetime import datetime as _dt
+        w = _dt.fromisoformat(ev["when"])
+        t = (ev.get("times") or {}).get(sec) if sec else None
+        if t:
+            h, m = map(int, t.split(":"))
+            w = w.replace(hour=h, minute=m)
+        return w
+
     def events_between(self, sec, start, end) -> list:
         """Events for a section (or all sections if sec is None) with start <= when < end."""
-        from datetime import datetime as _dt
         out = []
         for eid, ev in self._events().items():
-            w = _dt.fromisoformat(ev["when"])
+            w = self.event_when(ev, sec)
             if not (start <= w < end):
                 continue
             if sec and sec not in ev["sections"] and "all" not in ev["sections"]:
@@ -499,8 +549,13 @@ class Routine(commands.Cog):
 
     def event_line(self, w, ev, show_sections=False) -> str:
         name, icon = self.EVENT_TYPES.get(ev["kind"], ("Other", "📌"))
-        secs = f" · {', '.join(ev['sections'])}" if show_sections else ""
         det = f"\n   _{ev['details'][:120]}_" if ev.get("details") else ""
+        times = {k: v for k, v in (ev.get("times") or {}).items() if k != "*"}
+        if show_sections and times and len(set(times.values())) > 1:
+            from datetime import datetime as _dt
+            per = ", ".join(f"{k} {_dt.strptime(v, '%H:%M'):%I:%M %p}" for k, v in times.items())
+            return f"{icon} **{name}: {ev['title']}** — {w:%a %d %b} · {per}{det}"
+        secs = f" · {', '.join(ev['sections'])}" if show_sections else ""
         return f"{icon} **{name}: {ev['title']}** — {w:%a %d %b, %I:%M %p}{secs}{det}"
 
     def _day_bounds(self, offset=0):
@@ -541,6 +596,7 @@ class Routine(commands.Cog):
         secs = list(self.s.sections) if "all" in ev["sections"] else ev["sections"]
         posted = []
         for sec in secs:
+            w = self.event_when(ev, sec)
             ch = self.bot.channel_for(f"sec:{sec}:announcement")
             role = self.bot.role_for(f"role:sec:{sec}")
             if not ch:

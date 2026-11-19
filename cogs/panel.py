@@ -327,24 +327,43 @@ class ReminderModal(discord.ui.Modal):
 
 
 class EventMenu(BaseMenu):
-    """📌 Add a deadline / test: choose type + sections, then fill the form."""
+    """📌 Add a deadline / test: type → sections → pick a class date (suggested from the routine) → form."""
 
     def __init__(self, cog, user_id):
         super().__init__(cog, user_id)
-        r = cog.bot.get_cog("Routine")
         self.kind = "assignment"
         self.secs = []
+        self.date = None
+        self._build()
+
+    def _build(self):
+        self.clear_items()
+        r = self.cog.bot.get_cog("Routine")
         ks = discord.ui.Select(placeholder="1️⃣ What is it?", row=0, options=[
-            discord.SelectOption(label=name, value=k, emoji=icon, default=(k == "assignment"))
+            discord.SelectOption(label=name, value=k, emoji=icon, default=(k == self.kind))
             for k, (name, icon) in r.EVENT_TYPES.items()])
         ks.callback = self._kind
         self.add_item(ks)
-        opts = [discord.SelectOption(label="All my sections", value="all", emoji="🏫")] + section_options(cog.s)
+        opts = [discord.SelectOption(label="All my sections", value="all", emoji="🏫", default="all" in self.secs)]
+        for o in section_options(self.cog.s):
+            o.default = o.value in self.secs
+            opts.append(o)
         ss = discord.ui.Select(placeholder="2️⃣ Which section(s)?", row=1, options=opts[:25], min_values=1,
                                max_values=len(opts[:25]))
         ss.callback = self._secs
         self.add_item(ss)
-        b = discord.ui.Button(label="3️⃣ Enter title & date", style=discord.ButtonStyle.success, emoji="✏️", row=2)
+        sug = r.class_suggestions(self.secs) if self.secs else []
+        if sug:
+            ds = discord.ui.Select(placeholder="3️⃣ Pick a date — your class days with these sections", row=2, options=[
+                discord.SelectOption(label=label[:100], value=d.isoformat(), emoji="📅", default=(d == self.date))
+                for d, label in sug])
+        else:
+            ds = discord.ui.Select(placeholder="3️⃣ Class dates appear after you choose section(s)", row=2,
+                                   disabled=True, options=[discord.SelectOption(label="—", value="x")])
+        ds.callback = self._date
+        self.add_item(ds)
+        b = discord.ui.Button(label="4️⃣ Enter title (date/time can be changed)", style=discord.ButtonStyle.success,
+                              emoji="✏️", row=3)
         b.callback = self._go
         self.add_item(b)
 
@@ -354,23 +373,34 @@ class EventMenu(BaseMenu):
 
     async def _secs(self, interaction):
         self.secs = list(interaction.data["values"])
+        self.date = None
+        self._build()
+        await interaction.response.edit_message(view=self)
+
+    async def _date(self, interaction):
+        from datetime import date as _d
+        self.date = _d.fromisoformat(interaction.data["values"][0])
         await interaction.response.defer()
 
     async def _go(self, interaction):
         if not self.secs:
             await interaction.response.send_message("Choose the section(s) first.", ephemeral=True)
             return
-        await interaction.response.send_modal(EventModal(self.cog, self.kind, self.secs, interaction))
+        await interaction.response.send_modal(EventModal(self.cog, self.kind, self.secs, interaction, self.date))
+
+
+DATE_HELP = "Empty time = each section's class time on that day"
 
 
 class EventModal(discord.ui.Modal):
-    def __init__(self, cog, kind, secs, menu):
+    def __init__(self, cog, kind, secs, menu, day=None):
         name = cog.bot.get_cog("Routine").EVENT_TYPES[kind][0]
         super().__init__(title=f"📌 New {name}"[:45], timeout=900)
         self.cog, self.kind, self.secs, self.menu = cog, kind, secs, menu
         self.head = discord.ui.TextInput(label="Title", max_length=100, placeholder="e.g. Assignment 2 — Inheritance")
-        self.when = discord.ui.TextInput(label="Date & time (deadline / test time)", max_length=30,
-                                         placeholder="2026-10-30 23:59   or   2026-10-30 (= 11:59 PM)")
+        self.when = discord.ui.TextInput(label="Date (time optional → class time)", max_length=60,
+                                         default=day.isoformat() if day else None,
+                                         placeholder="2026-11-25 · or 2026-11-25 23:59 · or 2026-11-25 3D=08:30 3E=10:30")
         self.details = discord.ui.TextInput(label="Details (optional)", required=False, max_length=600,
                                             style=discord.TextStyle.paragraph,
                                             placeholder="Syllabus: Chapter 3–4 · Submit PDF in general-text")
@@ -380,14 +410,15 @@ class EventModal(discord.ui.Modal):
             self.add_item(x)
 
     async def on_submit(self, interaction: discord.Interaction):
-        raw = self.when.value.strip()
-        when = self.cog.parse_when(raw) or self.cog.parse_when(raw + " 23:59")
-        if not when:
-            await interaction.response.send_message("⚠️ Could not read the date. Use `2026-10-30 23:59`.", ephemeral=True)
+        got = self.cog.parse_event_date(self.when.value)
+        if not got:
+            await interaction.response.send_message("⚠️ Could not read the date. Use `2026-11-25` "
+                                                    "(+ optional time `23:59`).", ephemeral=True)
             return
         r = self.cog.bot.get_cog("Routine")
+        when, times = r.resolve_when(self.secs, got[0], got[1], got[2])
         eid = r.add_event(self.kind, self.head.value.strip(), self.secs, when, (self.details.value or "").strip(),
-                          interaction.user.name)
+                          interaction.user.name, times)
         posted = []
         if (self.announce.value or "yes").strip().lower().startswith("y"):
             posted = await r.announce_event(eid)
@@ -438,8 +469,13 @@ class EventEditModal(discord.ui.Modal):
         from datetime import datetime as _dt
         w = _dt.fromisoformat(ev["when"])
         self.head = discord.ui.TextInput(label="Title", max_length=100, default=ev["title"])
-        self.when = discord.ui.TextInput(label="Date & time", max_length=30, default=f"{w:%Y-%m-%d %H:%M}",
-                                         placeholder="2026-10-30 23:59")
+        times = {k: v for k, v in (ev.get("times") or {}).items() if k != "*"}
+        if times and len(set(times.values())) > 1:
+            default = f"{w:%Y-%m-%d} " + " ".join(f"{k}={v}" for k, v in times.items())
+        else:
+            default = f"{w:%Y-%m-%d %H:%M}"
+        self.when = discord.ui.TextInput(label="Date (time optional → class time)", max_length=80, default=default,
+                                         placeholder="2026-11-25 · 2026-11-25 23:59 · 2026-11-25 3D=08:30 3E=10:30")
         self.secs = discord.ui.TextInput(label="Sections (space separated, or all)", max_length=60,
                                          default=" ".join(ev["sections"]))
         self.details = discord.ui.TextInput(label="Details (optional)", required=False, max_length=600,
@@ -457,10 +493,10 @@ class EventEditModal(discord.ui.Modal):
         if ev is None:
             await interaction.response.send_message("This item was deleted.", ephemeral=True)
             return
-        raw = self.when.value.strip()
-        when = self.cog.parse_when(raw) or self.cog.parse_when(raw + " 23:59")
-        if not when:
-            await interaction.response.send_message("⚠️ Could not read the date. Use `2026-10-30 23:59`.", ephemeral=True)
+        got = self.cog.parse_event_date(self.when.value)
+        if not got:
+            await interaction.response.send_message("⚠️ Could not read the date. Use `2026-11-25` "
+                                                    "(+ optional time `23:59`).", ephemeral=True)
             return
         words = self.secs.value.replace(",", " ").split()
         if any(w.lower() == "all" for w in words):
@@ -471,7 +507,9 @@ class EventEditModal(discord.ui.Modal):
             await interaction.response.send_message("⚠️ Write at least one valid section (e.g. `3D 3E`) or `all`.",
                                                     ephemeral=True)
             return
+        when, times = r.resolve_when(secs, got[0], got[1], got[2])
         ev.update({"title": self.head.value.strip(), "when": when.isoformat(timespec="minutes"), "sections": secs,
+                   "times": times,
                    "details": (self.details.value or "").strip(), "edited": self.cog.s.now_str()})
         r.save_events()
         mode = (self.mode.value or "no").strip().lower()
@@ -1215,6 +1253,39 @@ class Panel(commands.Cog):
                         "'applications.commands' scope): %s", e)
 
     # ------------------------------------------------------------ scheduled announcements
+    def parse_event_date(self, raw: str):
+        """'2026-11-25' / '25-11-2026' / '25/11' + optional '23:59' or '11:59 PM' + optional '3D=08:30 3E=10:30'
+        → (date, (h, m) or None, {sec: (h, m)}) or None."""
+        txt = (raw or "").strip()
+        per = {}
+        for sec_txt, hh, mm in re.findall(r"(?i)\b([0-9][A-Z])\s*[=:@]\s*(\d{1,2})[:.](\d{2})", txt):
+            sec = self.s.normalize_section(sec_txt)
+            if sec:
+                per[sec] = (int(hh), int(mm))
+        txt = re.sub(r"(?i)\b[0-9][A-Z]\s*[=:@]\s*\d{1,2}[:.]\d{2}", " ", txt).strip()
+        m = (re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", txt) or re.search(r"(\d{1,2})[-/](\d{1,2})(?:[-/](\d{2,4}))?", txt))
+        if not m:
+            return None
+        now = self.s.now()
+        try:
+            if len(m.group(1)) == 4:
+                d = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date()
+            else:
+                y = m.group(3)
+                y = int(y) + (2000 if y and len(y) == 2 else 0) if y else now.year
+                d = datetime(y, int(m.group(2)), int(m.group(1))).date()
+        except ValueError:
+            return None
+        rest = txt[m.end():]
+        hm = None
+        t = re.search(r"(\d{1,2})[:.](\d{2})\s*([ap]m)?", rest, re.I)
+        if t:
+            h, mi = int(t.group(1)), int(t.group(2))
+            if t.group(3):
+                h = h % 12 + (12 if t.group(3).lower() == "pm" else 0)
+            hm = (h, mi)
+        return d, hm, per
+
     def parse_when(self, raw: str):
         now = self.s.now()
         raw = raw.strip().lower()
