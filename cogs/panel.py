@@ -334,6 +334,7 @@ class EventMenu(BaseMenu):
         self.kind = "assignment"
         self.secs = []
         self.date = None
+        self.where = None
         self._build()
 
     def _build(self):
@@ -354,21 +355,34 @@ class EventMenu(BaseMenu):
         self.add_item(ss)
         sug = r.class_suggestions(self.secs) if self.secs else []
         if sug:
-            ds = discord.ui.Select(placeholder="3️⃣ Pick a date — your class days with these sections", row=2, options=[
-                discord.SelectOption(label=label[:100], value=d.isoformat(), emoji="📅", default=(d == self.date))
-                for d, label in sug])
+            ds = discord.ui.Select(placeholder="3️⃣ 📅 Pick a date (🏫 = you have class with them)", row=2, options=[
+                discord.SelectOption(label=label[:100], value=d.isoformat(), emoji="🏫" if has else "📅",
+                                     default=(d == self.date)) for d, label, has in sug])
         else:
             ds = discord.ui.Select(placeholder="3️⃣ Class dates appear after you choose section(s)", row=2,
                                    disabled=True, options=[discord.SelectOption(label="—", value="x")])
         ds.callback = self._date
         self.add_item(ds)
+        if self.kind == "online":
+            cs = discord.ui.ChannelSelect(placeholder="📍 Where? (empty = each section's 🔊 voice channel)", row=3,
+                                          min_values=0, max_values=1,
+                                          channel_types=[discord.ChannelType.voice, discord.ChannelType.stage_voice,
+                                                         discord.ChannelType.text])
+            cs.callback = self._where
+            self.add_item(cs)
         b = discord.ui.Button(label="4️⃣ Enter title (date/time can be changed)", style=discord.ButtonStyle.success,
-                              emoji="✏️", row=3)
+                              emoji="✏️", row=4)
         b.callback = self._go
         self.add_item(b)
 
     async def _kind(self, interaction):
         self.kind = interaction.data["values"][0]
+        self._build()
+        await interaction.response.edit_message(view=self)
+
+    async def _where(self, interaction):
+        vals = interaction.data.get("values", [])
+        self.where = int(vals[0]) if vals else None
         await interaction.response.defer()
 
     async def _secs(self, interaction):
@@ -386,18 +400,20 @@ class EventMenu(BaseMenu):
         if not self.secs:
             await interaction.response.send_message("Choose the section(s) first.", ephemeral=True)
             return
-        await interaction.response.send_modal(EventModal(self.cog, self.kind, self.secs, interaction, self.date))
+        await interaction.response.send_modal(EventModal(self.cog, self.kind, self.secs, interaction, self.date,
+                                                         self.where))
 
 
 DATE_HELP = "Empty time = each section's class time on that day"
 
 
 class EventModal(discord.ui.Modal):
-    def __init__(self, cog, kind, secs, menu, day=None):
+    def __init__(self, cog, kind, secs, menu, day=None, where=None):
         name = cog.bot.get_cog("Routine").EVENT_TYPES[kind][0]
         super().__init__(title=f"📌 New {name}"[:45], timeout=900)
-        self.cog, self.kind, self.secs, self.menu = cog, kind, secs, menu
-        self.head = discord.ui.TextInput(label="Title", max_length=100, placeholder="e.g. Assignment 2 — Inheritance")
+        self.cog, self.kind, self.secs, self.menu, self.where = cog, kind, secs, menu, where
+        self.head = discord.ui.TextInput(label="Title", max_length=100, placeholder="e.g. Assignment 2 — Inheritance"
+                                         if kind != "online" else "e.g. OOP II — Polymorphism (online)")
         self.when = discord.ui.TextInput(label="Date (time optional → class time)", max_length=60,
                                          default=day.isoformat() if day else None,
                                          placeholder="2026-11-25 · or 2026-11-25 23:59 · or 2026-11-25 3D=08:30 3E=10:30")
@@ -419,6 +435,9 @@ class EventModal(discord.ui.Modal):
         when, times = r.resolve_when(self.secs, got[0], got[1], got[2])
         eid = r.add_event(self.kind, self.head.value.strip(), self.secs, when, (self.details.value or "").strip(),
                           interaction.user.name, times)
+        if self.where:
+            r._events()[eid]["where"] = self.where
+            r.save_events()
         posted = []
         if (self.announce.value or "yes").strip().lower().startswith("y"):
             posted = await r.announce_event(eid)
@@ -447,6 +466,17 @@ class EventsListMenu(BaseMenu):
             sel = discord.ui.Select(placeholder="🗑️ Select to delete…", options=o, min_values=1, max_values=len(o), row=1)
             sel.callback = self._delete
             self.add_item(sel)
+            rm = discord.ui.Select(placeholder="🔔 Send a reminder NOW for…", options=opts(), row=2)
+            rm.callback = self._remind
+            self.add_item(rm)
+
+    async def _remind(self, interaction):
+        r = self.cog.bot.get_cog("Routine")
+        eid = interaction.data["values"][0]
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        sent = await r.send_reminder(eid)
+        await interaction.followup.send(("🔔 Reminder sent to: " + ", ".join(sent)) if sent else
+                                        "⚠️ Could not send (no announcement channel?).", ephemeral=True)
 
     async def _edit(self, interaction):
         eid = interaction.data["values"][0]
@@ -508,6 +538,8 @@ class EventEditModal(discord.ui.Modal):
                                                     ephemeral=True)
             return
         when, times = r.resolve_when(secs, got[0], got[1], got[2])
+        if when.isoformat(timespec="minutes") != ev["when"] or times != ev.get("times"):
+            ev["auto_reminded"] = []
         ev.update({"title": self.head.value.strip(), "when": when.isoformat(timespec="minutes"), "sections": secs,
                    "times": times,
                    "details": (self.details.value or "").strip(), "edited": self.cog.s.now_str()})
@@ -867,8 +899,8 @@ PANEL_GROUPS = [
         ("reminder", "Remind a message", "⏰", B.primary, "Paste a message link → re-announce it now or later (deadline, CT…). Tip: right-click a message → Apps → ⏰ Set reminder."),
     ]),
     ("Row 7 · 📌 Deadlines & tests", discord.Color.orange(), [
-        ("event_add", "Add deadline / test", "📌", B.success, "Assignment, CT, quiz, lab report, presentation… → students see it in 📅 My section today."),
-        ("event_list", "Edit / delete deadlines", "📋", B.secondary, "See all upcoming deadlines and tests → ✏️ edit (date, title, sections…) or 🗑️ delete."),
+        ("event_add", "Add deadline / test / online class", "📌", B.success, "Type → sections → 📅 pick a date (class days marked) → title. Auto reminder: 10 PM the day before (online class: 15 min before)."),
+        ("event_list", "Edit / delete / remind", "📋", B.secondary, "Upcoming deadlines, tests, online classes → ✏️ edit · 🗑️ delete · 🔔 send a reminder now."),
         ("subs", "Submission list", "📝", B.primary, "Google Sheet / Form link → who submitted (ID, name, time) → each section's list in its own channel."),
     ]),
     ("Row 8 · 📖 Help", discord.Color.teal(), [

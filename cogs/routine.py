@@ -231,6 +231,7 @@ class Routine(commands.Cog):
             self.brief = tasks.loop(time=dtime(hour=h, minute=m, tzinfo=self.s.tz))(self._daily_brief)
         from datetime import time as _t
         self.midnight = tasks.loop(time=_t(hour=0, minute=1, tzinfo=self.s.tz))(self._midnight)
+        self.reminders = tasks.loop(minutes=2)(self._reminder_tick)
 
     async def cog_load(self):
         if self.auto:
@@ -238,9 +239,11 @@ class Routine(commands.Cog):
         if self.brief:
             self.brief.start()
         self.midnight.start()
+        self.reminders.start()
 
     async def cog_unload(self):
         self.midnight.cancel()
+        self.reminders.cancel()
         if self.auto:
             self.auto.cancel()
         if self.brief:
@@ -465,7 +468,7 @@ class Routine(commands.Cog):
     # ------------------------------------------------------------ deadlines & tests (assignment, CT, quiz …)
     EVENT_TYPES = {"assignment": ("Assignment", "📝"), "ct": ("CT / Class test", "✍️"), "quiz": ("Quiz", "❓"),
                    "lab": ("Lab report", "🧪"), "presentation": ("Presentation", "🎤"), "exam": ("Exam", "📚"),
-                   "other": ("Other", "📌")}
+                   "online": ("Online class", "💻"), "other": ("Other", "📌")}
 
     def _events(self) -> dict:
         if not hasattr(self, "_ev"):
@@ -479,7 +482,8 @@ class Routine(commands.Cog):
         import secrets
         eid = secrets.token_hex(3)
         self._events()[eid] = {"kind": kind, "title": title, "sections": sections, "when": when.isoformat(timespec="minutes"),
-                               "times": times or {}, "details": details, "by": by, "created": self.s.now_str()}
+                               "times": times or {}, "details": details, "by": by, "created": self.s.now_str(),
+                               "created_at": self.s.now().isoformat()}
         self.save_events()
         return eid
 
@@ -495,20 +499,24 @@ class Routine(commands.Cog):
     def expand_secs(self, secs):
         return list(self.s.sections) if "all" in secs else [x for x in secs if x in self.s.sections]
 
-    def class_suggestions(self, secs, days=28) -> list:
-        """Upcoming dates when I have a class with these sections → [(date, label)]."""
+    def class_suggestions(self, secs, days=25, only_class_days=False) -> list:
+        """Next `days` dates → [(date, label, has_class)]; class days show my class times."""
         from datetime import timedelta
         out, today = [], self.s.now().date()
-        for i in range(0, days):
+        for i in range(0, 60):
             d = today + timedelta(days=i)
             parts = []
             for sec in self.expand_secs(secs):
                 st = self.class_start(sec, d)
                 if st:
                     parts.append(f"{sec} {(st[0] % 12) or 12}:{st[1]:02d} {'AM' if st[0] < 12 else 'PM'}")
-            if parts:
-                out.append((d, f"{d:%a %d %b}" + (" (today)" if i == 0 else "") + " · " + ", ".join(parts)))
-        return out[:25]
+            if only_class_days and not parts:
+                continue
+            tag = " (today)" if i == 0 else " (tomorrow)" if i == 1 else ""
+            out.append((d, f"{d:%a %d %b}{tag}" + (" · 🏫 " + ", ".join(parts) if parts else " · no class"), bool(parts)))
+            if len(out) >= days:
+                break
+        return out
 
     def resolve_when(self, secs, day, hm=None, per_sec=None):
         """→ (earliest datetime, {sec: 'HH:MM'}). hm = one time for all; else each section's class time
@@ -586,6 +594,89 @@ class Routine(commands.Cog):
         if old:
             self.save_events()
 
+    # ---- online class place + reminders
+    def event_place(self, ev, sec):
+        """Channel where an online class happens: chosen channel, else the section's voice channel."""
+        cid = ev.get("where")
+        ch = self.bot.get_channel(int(cid)) if cid else None
+        return ch or self.bot.channel_for(f"sec:{sec}:voice_class")
+
+    def reminder_due(self, ev, sec):
+        """When the automatic reminder is sent: online class → N minutes before; others → 10 PM the day before."""
+        from datetime import timedelta
+        w = self.event_when(ev, sec)
+        cfg = self.s.raw.get("routine", {}) or {}
+        if ev["kind"] == "online":
+            return w - timedelta(minutes=int(cfg.get("online_reminder_minutes", 15)))
+        hh, mm = (int(x) for x in str(cfg.get("deadline_reminder_time", "22:00")).split(":"))
+        return (w - timedelta(days=1)).replace(hour=hh, minute=mm, second=0, microsecond=0)
+
+    async def send_reminder(self, eid, secs=None, auto=False) -> list:
+        ev = self._events().get(eid)
+        if not ev:
+            return []
+        name, icon = self.EVENT_TYPES.get(ev["kind"], ("Other", "📌"))
+        sent = []
+        for sec in secs or self.expand_secs(ev["sections"]):
+            ch = self.bot.channel_for(f"sec:{sec}:announcement")
+            if ch is None:
+                continue
+            w = self.event_when(ev, sec)
+            now = self.s.now()
+            if w.date() == now.date():
+                rel = "TODAY"
+            elif (w.date() - now.date()).days == 1:
+                rel = "TOMORROW"
+            else:
+                rel = f"{w:%A}"
+            lines = [f"🗓️ **{rel}** · {w:%d %b} · ⏰ **{w:%I:%M %p}**"]
+            if ev["kind"] == "online":
+                place = self.event_place(ev, sec)
+                if place:
+                    lines.append(f"📍 Join: {place.mention}")
+            if ev.get("details"):
+                lines.append(ev["details"][:500])
+            emb = discord.Embed(title=f"⏰ Reminder — {icon} {name}: {ev['title']}", description="\n".join(lines),
+                                color=discord.Color.red() if rel in ("TODAY", "TOMORROW") else discord.Color.orange())
+            emb.set_footer(text=f"{self.s.teacher} · Section {sec}" + (" · automatic reminder" if auto else ""))
+            role = self.bot.role_for(f"role:sec:{sec}")
+            ref = None
+            old = (ev.get("msgs") or {}).get(sec)
+            if old:
+                try:
+                    ref = await self.bot.get_channel(int(old[0])).fetch_message(int(old[1]))
+                except (discord.HTTPException, AttributeError):
+                    ref = None
+            try:
+                await ch.send(content=role.mention if role else None, embed=emb, reference=ref, mention_author=False,
+                              allowed_mentions=discord.AllowedMentions(roles=True))
+                sent.append(sec)
+            except discord.HTTPException:
+                pass
+        return sent
+
+    async def _reminder_tick(self):
+        await self.bot.wait_until_ready()
+        now = self.s.now()
+        changed = False
+        for eid, ev in list(self._events().items()):
+            done_ = set(ev.get("auto_reminded") or [])
+            for sec in self.expand_secs(ev["sections"]):
+                if sec in done_:
+                    continue
+                due, w = self.reminder_due(ev, sec), self.event_when(ev, sec)
+                if due <= now < w:
+                    created = ev.get("created_at")
+                    if created and created > due.isoformat() and ev["kind"] != "online":
+                        done_.add(sec)  # added after the reminder time — the announcement is enough
+                    else:
+                        await self.send_reminder(eid, [sec], auto=True)
+                        done_.add(sec)
+                    changed = True
+            ev["auto_reminded"] = sorted(done_)
+        if changed:
+            self.save_events()
+
     async def announce_event(self, eid, mode: str = "new"):
         """mode 'new' = post (and notify) · 'edit' = edit the earlier announcements in place (no notification)."""
         ev = self._events()[eid]
@@ -603,6 +694,8 @@ class Routine(commands.Cog):
                 continue
             emb = discord.Embed(title=f"{icon} {name}: {ev['title']}", color=discord.Color.orange(),
                                 description=(f"🗓️ **{w:%A, %d %B %Y}**\n⏰ **{w:%I:%M %p}**"
+                                             + (f"\n📍 Join: {self.event_place(ev, sec).mention}"
+                                                if ev["kind"] == "online" and self.event_place(ev, sec) else "")
                                              + (f"\n\n{ev['details']}" if ev.get("details") else "")))
             emb.set_footer(text=f"{self.s.teacher} · Section {sec} · also shown under 📅 in 🗓️┃routine-and-deadlines"
                                 + (" · ✏️ updated" if ev.get("edited") else ""))
