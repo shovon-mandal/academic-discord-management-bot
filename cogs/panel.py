@@ -64,6 +64,24 @@ async def done(interaction: discord.Interaction, text: str = "✅ Done — see t
         pass
 
 
+def voice_options(bot, secs=None, current=None):
+    """Voice / stage channels as a list with their category, sections' own channels first."""
+    g = bot.main_guild()
+    if not g:
+        return []
+    mine = []
+    for sec in (secs or []):
+        ch = bot.channel_for(f"sec:{sec}:voice_class")
+        if ch:
+            mine.append(ch)
+    others = [c for c in list(g.voice_channels) + list(g.stage_channels) if c not in mine]
+    out = []
+    for c in (mine + others)[:25]:
+        out.append(discord.SelectOption(label=f"{c.name} · {c.category.name if c.category else '—'}"[:100],
+                                        value=str(c.id), emoji="🔊", default=(current == c.id)))
+    return out
+
+
 def section_options(settings, with_courses=True):
     out = []
     for sec in settings.sections:
@@ -262,9 +280,11 @@ class AnnounceModal(discord.ui.Modal):
                 return
             jid = self.cog.add_schedule(self.targets, self.body.value, self.head.value, self.ping, when,
                                         interaction.user.name)
+            staged = await self.cog.stage_job(jid, interaction.user)
             await interaction.response.send_message(
-                f"🗓️ Scheduled for **{when:%a %d %b %Y, %H:%M}** → {', '.join(self.targets)} (id `{jid}`).",
-                ephemeral=True)
+                f"🗓️ Scheduled for **{when:%a %d %b %Y, %H:%M}** → {', '.join(self.targets)} (id `{jid}`)."
+                + ("\n👀 Preview in the bot-test channel — click **✅ Approve** there, otherwise it is NOT posted."
+                   if staged else ""), ephemeral=True)
             await done(self.menu, "🗓️ Scheduled.")
             return
         await interaction.response.send_message("⏳ Posting…", ephemeral=True)
@@ -342,6 +362,11 @@ class ReminderModal(discord.ui.Modal):
             return
         times = [t.strip() for t in (self.when.value or "").split(",") if t.strip()]
         if not times:
+            pid = await self.cog.stage_msg_reminder(target, msg.jump_url, self.cog.snapshot(msg), self.note.value,
+                                                    interaction.user)
+            if pid:
+                await self.cog.bot.get_cog("Poster").notify_staged(interaction, pid)
+                return
             await self.cog.post_reminder(target, msg.jump_url, self.cog.snapshot(msg), self.note.value)
             await interaction.followup.send(f"⏰ Reminder posted → **{target}**.", ephemeral=True)
             return
@@ -351,10 +376,12 @@ class ReminderModal(discord.ui.Modal):
             if not when:
                 await interaction.followup.send(f"⚠️ Could not read the time `{t}`.", ephemeral=True)
                 return
-            self.cog.add_schedule([target], self.note.value, "⏰ Reminder", True, when, interaction.user.name,
-                                  kind="reminder", link=msg.jump_url, snapshot=self.cog.snapshot(msg))
+            jid = self.cog.add_schedule([target], self.note.value, "⏰ Reminder", True, when, interaction.user.name,
+                                        kind="reminder", link=msg.jump_url, snapshot=self.cog.snapshot(msg))
+            await self.cog.stage_job(jid, interaction.user)
             done_at.append(f"{when:%a %d %b, %I:%M %p}")
-        await interaction.followup.send(f"🗓️ Reminder scheduled → **{target}** at: " + " · ".join(done_at),
+        await interaction.followup.send(f"🗓️ Reminder scheduled → **{target}** at: " + " · ".join(done_at)
+                                        + "\n👀 Approve each one in the bot-test channel, otherwise it is NOT posted.",
                                         ephemeral=True)
 
 
@@ -405,10 +432,10 @@ class EventMenu(BaseMenu):
             tg.callback = self._target
             self.add_item(tg)
         if self.kind == "online":
-            cs = discord.ui.ChannelSelect(placeholder="📍 Where? (empty = each section's 🔊 voice channel)", row=3,
-                                          min_values=0, max_values=1,
-                                          channel_types=[discord.ChannelType.voice, discord.ChannelType.stage_voice,
-                                                         discord.ChannelType.text])
+            vo = voice_options(self.cog.bot, self.cog.bot.get_cog("Routine").expand_secs(self.secs), self.where)
+            cs = discord.ui.Select(placeholder="📍 Where? (empty = each section's own 🔊 voice channel)", row=3,
+                                   min_values=0, max_values=1,
+                                   options=vo or [discord.SelectOption(label="(no voice channels)", value="0")])
             cs.callback = self._where
             self.add_item(cs)
         b = discord.ui.Button(label="4️⃣ Enter title (date/time can be changed)", style=discord.ButtonStyle.success,
@@ -427,7 +454,7 @@ class EventMenu(BaseMenu):
         await interaction.response.defer()
 
     async def _where(self, interaction):
-        vals = interaction.data.get("values", [])
+        vals = [v for v in interaction.data.get("values", []) if v != "0"]
         self.where = int(vals[0]) if vals else None
         await interaction.response.defer()
 
@@ -493,11 +520,18 @@ class EventModal(discord.ui.Modal):
         if self.where:
             r._events()[eid]["where"] = self.where
         r.save_events()
-        posted = []
+        posted, staged = [], None
         if (self.announce.value or "yes").strip().lower().startswith("y"):
-            posted = await r.announce_event(eid)
+            staged = await r.stage_event(eid, interaction.user)
+            if not staged:
+                posted = await r.announce_event(eid)
+        else:
+            r._events()[eid]["no_announce"] = True
+            r.save_events()
+        tc = self.cog.bot.get_cog("Poster").test_channel()
         await interaction.response.send_message(
             f"✅ Saved: {r.event_line(when, r._events()[eid], True)}\n"
+            + (f"👀 Preview in {tc.mention} — click **✅ Post now** there to announce it.\n" if staged else "")
             + (f"📢 Announced in: {', '.join(posted)}\n" if posted else "")
             + "Students see it under 📅 **My section today** in 🗓️┃routine-and-deadlines (on the day and 7 days before).",
             ephemeral=True)
@@ -543,6 +577,10 @@ class EventsListMenu(BaseMenu):
         r = self.cog.bot.get_cog("Routine")
         eid = interaction.data["values"][0]
         await interaction.response.defer(ephemeral=True, thinking=True)
+        pid = await r.stage_reminder_now(eid, None, interaction.user)
+        if pid:
+            await self.cog.bot.get_cog("Poster").notify_staged(interaction, pid)
+            return
         sent = await r.send_reminder(eid)
         await interaction.followup.send(("🔔 Reminder sent to: " + ", ".join(sent)) if sent else
                                         "⚠️ Could not send (no announcement channel?).", ephemeral=True)
@@ -721,11 +759,14 @@ class ClassChangeModal(discord.ui.Modal):
                 new_time = f"{(h % 12) or 12:02d}:{m:02d} {'AM' if h < 12 else 'PM'}"
         place = (self.place.value or "").strip() if self.place else ""
         cid = r.add_change(self.sec, d, it, self.action, new_date, new_time, place, (self.note.value or "").strip())
-        ok = False
+        ok, staged = False, None
         if (self.ann.value or "yes").strip().lower().startswith("y"):
-            ok = await r.announce_change(cid)
+            staged = await r.stage_change(cid, interaction.user)
+            if not staged:
+                ok = await r.announce_change(cid)
         await interaction.response.send_message(
             "✅ Saved: " + r.change_text(r._changes()[cid]) + ("\n📢 Announced in the section." if ok else "")
+            + ("\n👀 Preview in the bot-test channel — click **✅ Post now** there to announce it." if staged else "")
             + "\nStudents see it under 📅 Today / Tomorrow in 🗓️┃routine-and-deadlines.", ephemeral=True)
         await done(self.menu, "✅ Class change saved.")
 
@@ -748,23 +789,26 @@ class MoveTargetMenu(BaseMenu):
         b.callback = self._save
         self.add_item(b)
         if ev["kind"] == "online":
-            vc = discord.ui.ChannelSelect(placeholder="🔊 Change where the ONLINE CLASS happens (voice channel…)",
-                                          min_values=1, max_values=1, row=2,
-                                          channel_types=[discord.ChannelType.voice, discord.ChannelType.stage_voice,
-                                                         discord.ChannelType.text])
+            vo = voice_options(cog.bot, r.expand_secs(ev["sections"]), ev.get("where"))
+            vc = discord.ui.Select(placeholder="🔊 Change where the ONLINE CLASS happens", min_values=1, max_values=1,
+                                   row=2, options=vo or [discord.SelectOption(label="(no voice channels)", value="0")])
             vc.callback = self._where
             self.add_item(vc)
 
     async def _where(self, i):
         r = self.cog.bot.get_cog("Routine")
         ev = r._events()[self.eid]
+        if i.data["values"][0] == "0":
+            await i.response.send_message("No voice channel to choose.", ephemeral=True)
+            return
         ev["where"] = int(i.data["values"][0])
         ev["edited"] = self.cog.s.now_str()
         r.save_events()
         await i.response.defer()
-        fixed = await r.announce_event(self.eid, "edit")  # announcement + reminders show the new channel
+        pid = await r.stage_event(self.eid, i.user, "edit") if ev.get("msgs") else None
         await i.edit_original_response(content=f"🔊 Class channel changed to <#{ev['where']}>"
-                                       + (f" · announcement updated in: {', '.join(fixed)}" if fixed else ""), view=None)
+                                       + (" · 👀 preview of the fixed announcement is in the bot-test channel "
+                                          "(✅ Post now there)." if pid else ""), view=None)
 
     def text(self):
         ev = self.cog.bot.get_cog("Routine")._events()[self.eid]
@@ -786,6 +830,12 @@ class MoveTargetMenu(BaseMenu):
         r._events()[self.eid]["target"] = self.target
         r.save_events()
         await i.response.defer()
+        pid = await r.stage_event(self.eid, i.user, "move")
+        if pid:
+            await i.edit_original_response(content="👀 Preview of the moved post is in the bot-test channel — "
+                                                   "✅ Post now there deletes the old post and posts in the new channel.",
+                                           view=None)
+            return
         posted = await r.announce_event(self.eid, "move")
         await i.edit_original_response(content=f"🚚 Moved — posted in: {', '.join(posted) or 'nothing'}", view=None)
 
@@ -823,15 +873,17 @@ class ReminderTimeModal(discord.ui.Modal):
         ev = r._events()[self.eid]
         await interaction.response.send_message(
             f"⏰ Reminder scheduled for **{at:%a %d %b, %I:%M %p}** → {', '.join(secs) or 'all its sections'}\n"
+            "👀 A preview appears in the bot-test channel within 2 minutes — **✅ Approve** it there, "
+            "otherwise it is NOT sent.\n"
             f"Reminders for **{ev['title']}**: {r.reminder_lines(ev)}", ephemeral=True)
 
 
 class EventEditModal(discord.ui.Modal):
-    def __init__(self, cog, eid, menu):
+    def __init__(self, cog, eid, menu, restage=None):
         r = cog.bot.get_cog("Routine")
         ev = r._events()[eid]
         super().__init__(title="✏️ Edit deadline / test", timeout=900)
-        self.cog, self.eid, self.menu = cog, eid, menu
+        self.cog, self.eid, self.menu, self.restage = cog, eid, menu, restage
         from datetime import datetime as _dt
         w = _dt.fromisoformat(ev["when"])
         self.head = discord.ui.TextInput(label="Title", max_length=100, default=ev["title"])
@@ -881,16 +933,21 @@ class EventEditModal(discord.ui.Modal):
                    "details": (self.details.value or "").strip(), "edited": self.cog.s.now_str()})
         r.save_events()
         mode = (self.mode.value or "no").strip().lower()
-        posted = []
-        if mode.startswith("e"):
-            posted = await r.announce_event(self.eid, "edit")
-        elif mode.startswith("n"):
-            posted = await r.announce_event(self.eid, "new")
+        if self.restage and mode.startswith("no"):
+            mode = "new"  # editing an unposted preview → make a fresh preview
+        posted, staged = [], None
+        if mode.startswith("e") or mode.startswith("n"):
+            m = "edit" if mode.startswith("e") else "new"
+            staged = await r.stage_event(self.eid, interaction.user, m, replace=self.restage)
+            if not staged:
+                posted = await r.announce_event(self.eid, m)
         await interaction.response.send_message(
             f"✅ Updated: {r.event_line(when, ev, True)}\n"
+            + ("👀 New preview in the bot-test channel — click ✅ Post now there.\n" if staged else "")
             + (f"📢 Announcement {'edited' if mode.startswith('e') else 'posted'} in: {', '.join(posted)}\n" if posted else "")
             + "Students see the new date under 📅 in 🗓️┃routine-and-deadlines.", ephemeral=True)
-        await done(self.menu, "✅ Deadline / test updated.")
+        if self.menu is not None:
+            await done(self.menu, "✅ Deadline / test updated.")
 
 
 # ====================================================================== attendance
@@ -1708,6 +1765,63 @@ class Panel(commands.Cog):
         self.save_jobs()
         return jid
 
+    def _reminder_embed(self, target, link, snapshot, note):
+        admin = self.bot.get_cog("Admin")
+        kind, val = admin.resolve_target(target)
+        ch, roles, _, label = admin.target_info(kind, val)
+        quoted = "\n".join(f"> {line}" for line in (snapshot or "(no text)").splitlines()[:15])
+        e = discord.Embed(title="⏰ Reminder", color=discord.Color.orange(), timestamp=self.s.now(),
+                          description=((f"**{note}**\n\n" if note else "") + quoted)[:4000])
+        e.set_footer(text=f"{self.s.teacher} · {label}")
+        return ch, roles, e
+
+    async def stage_msg_reminder(self, target, link, snapshot, note, by):
+        poster = self.bot.get_cog("Poster")
+        if not poster or not poster.test_channel():
+            return None
+        ch, roles, e = self._reminder_embed(target, link, snapshot, note)
+        mention = " ".join(r.mention for r in roles if r) or "nobody"
+        info = [f"📍 **Where:** {ch.mention if ch else '—'} ({ch.category.name if ch and ch.category else ''})",
+                f"🔔 **Mention:** {mention}", f"🔗 Original: {link}"]
+
+        async def render(tc):
+            v = discord.ui.View(timeout=None)
+            v.add_item(discord.ui.Button(label="Open the original message", emoji="🔗",
+                                         style=discord.ButtonStyle.link, url=link))
+            await tc.send(content=mention if mention != "nobody" else None, embed=e, view=v,
+                          allowed_mentions=discord.AllowedMentions.none())
+        return await poster.gate("msgrem", {"target": target, "link": link, "snapshot": snapshot, "note": note},
+                                 f"Reminder → {target}", info, render, 1, by)
+
+    async def stage_job(self, jid, by):
+        """Scheduled announcement / reminder → preview in bot-test; it is only posted if approved."""
+        poster = self.bot.get_cog("Poster")
+        j = self.jobs.get(jid)
+        if not poster or not j or not poster.test_channel():
+            if j:
+                j["ok"] = True
+                self.save_jobs()
+            return None
+        j["ok"] = False
+        self.save_jobs()
+        when = datetime.fromisoformat(j["when"])
+        info = [f"🗓️ **Scheduled for:** {when:%a %d %b %Y, %I:%M %p}", f"📍 **To:** {', '.join(j['targets'])}",
+                f"🔔 **Mention:** {'yes (section roles)' if j.get('ping') else 'no'}",
+                "Not approved = **not posted**."]
+        admin = self.bot.get_cog("Admin")
+
+        async def render(tc):
+            if j.get("kind") == "reminder":
+                _, _, e = self._reminder_embed(j["targets"][0], j["link"], j.get("snapshot", ""), j.get("text", ""))
+            else:
+                kind, val = admin.resolve_target(j["targets"][0])
+                _, _, _, label = admin.target_info(kind, val)
+                e = discord.Embed(title=j.get("title") or "📢 Announcement", description=j["text"] or None,
+                                  color=discord.Color.gold())
+                e.set_footer(text=f"{self.s.teacher} · {label}")
+            await tc.send(embed=e)
+        return await poster.gate("job", {"jid": jid}, "Scheduled post", info, render, len(j["targets"]), by)
+
     def save_jobs(self):
         save_json(SCHEDULE_FILE, self.jobs)
 
@@ -1738,8 +1852,13 @@ class Panel(commands.Cog):
             self.save_jobs()
             if not admin or not log_ch:
                 continue
+            if j.get("ok") is False:  # never approved in bot-test → not posted
+                await log_ch.send(f"⏭️ Scheduled post `{jid}` → {', '.join(j['targets'])} was **not posted** "
+                                  "(it was not approved in the bot-test channel).")
+                continue
 
             class _Ctx:
+                approved = True
                 guild = log_ch.guild
                 author = log_ch.guild.me
                 channel = log_ch

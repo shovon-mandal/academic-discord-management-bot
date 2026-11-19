@@ -249,23 +249,47 @@ class Submissions(commands.Cog):
         out.append("```\n" + "\n".join([head] + cur) + "\n```")
         return out
 
-    # ---- posting (edits the old list for the same topic + channel)
-    async def post(self, job: Job, data: dict, who) -> str:
+    # ---- posting (edits the old list for the same topic + channel) — only after ✅ in bot-test
+    def prepare(self, job: Job, data: dict) -> dict:
+        return {"topic": job.topic, "channel_key": job.channel_key, "sections": job.sections,
+                "mention": "mention" in job.options, "link": job.link,
+                "counts": {sec: len(data[sec]["done"]) for sec in job.sections},
+                "embeds": {sec: [e.to_dict() for e in self.embeds_for(job, sec, data[sec])] for sec in job.sections}}
+
+    async def stage(self, job: Job, data: dict, who):
+        poster = self.bot.get_cog("Poster")
+        if not poster or not poster.test_channel():
+            return None
+        prep = self.prepare(job, data)
+        ch_name = next((c["name"] for c in self.s.raw["channels"]["section"] if c["key"] == job.channel_key),
+                       job.channel_key)
+        info = [f"📍 **Where:** {ch_name} of " + ", ".join(job.sections),
+                "🔔 **Mention:** " + (", ".join(f"@{x}" for x in job.sections) if prep["mention"] else "nobody"),
+                "Counts: " + " · ".join(f"{x} ✅{prep['counts'][x]}" for x in job.sections),
+                "Same topic posted before → the old list is **updated** (no new message)."]
+        first = job.sections[0]
+
+        async def render(tc):
+            await tc.send(content=f"`@{first}`" if prep["mention"] else None,
+                          embeds=[discord.Embed.from_dict(e) for e in prep["embeds"][first]])
+        return await poster.gate("subs", prep, f"Submission list · {job.topic}", info, render, len(job.sections), who)
+
+    async def post_prepared(self, prep: dict, who) -> str:
         posts = load_json(POSTS_FILE, {})
         ok, bad = [], []
-        for sec in job.sections:
-            ch = self.bot.channel_for(f"sec:{sec}:{job.channel_key}")
+        for sec in prep["sections"]:
+            ch = self.bot.channel_for(f"sec:{sec}:{prep['channel_key']}")
             if ch is None:
-                bad.append(f"{sec} (no {job.channel_key} channel)")
+                bad.append(f"{sec} (no {prep['channel_key']} channel)")
                 continue
-            embeds = self.embeds_for(job, sec, data[sec])
+            embeds = [discord.Embed.from_dict(e) for e in prep["embeds"][sec]]
             content = None
             allowed = discord.AllowedMentions.none()
-            if "mention" in job.options:
+            if prep["mention"]:
                 role = self.bot.role_for(f"role:sec:{sec}")
                 if role:
                     content, allowed = role.mention, discord.AllowedMentions(roles=[role])
-            key = f"{job.topic.strip().lower()}|{ch.id}"
+            key = f"{prep['topic'].strip().lower()}|{ch.id}"
             msg = None
             old = posts.get(key)
             if old:
@@ -278,15 +302,18 @@ class Submissions(commands.Cog):
                 if msg is None:
                     msg = await ch.send(content=content, embeds=embeds, allowed_mentions=allowed)
                 posts[key] = msg.id
-                ok.append(f"[{sec}]({msg.jump_url}) ({len(data[sec]['done'])})")
+                ok.append(f"[{sec}]({msg.jump_url}) ({prep['counts'][sec]})")
             except discord.HTTPException as e:
                 bad.append(f"{sec} ({e.text or e.status})")
         save_json(POSTS_FILE, posts)
-        text = (f"✅ **{job.topic}** posted: " + ", ".join(ok)) if ok else "❌ Nothing was posted."
+        text = (f"✅ **{prep['topic']}** posted: " + ", ".join(ok)) if ok else "❌ Nothing was posted."
         if bad:
             text += "\n⚠️ " + ", ".join(bad)
-        await self.bot.send_log("📝 Submission list posted", f"by {who.mention}\n{text}\nSheet: {job.link}")
+        await self.bot.send_log("📝 Submission list posted", f"by {who.mention}\n{text}\nSheet: {prep['link']}")
         return text
+
+    async def post(self, job: Job, data: dict, who) -> str:
+        return await self.post_prepared(self.prepare(job, data), who)
 
     def preview(self, job: Job, data: dict) -> str:
         ch_name = next((c["name"] for c in self.s.raw["channels"]["section"] if c["key"] == job.channel_key),
@@ -483,7 +510,7 @@ class ConfirmMenu(_Owned):
     def __init__(self, cog, user_id, job, data):
         super().__init__(cog, user_id, job)
         self.data = data
-        go = discord.ui.Button(label=f"Post in {len(job.sections)} section(s)", emoji="✅",
+        go = discord.ui.Button(label=f"Preview in bot-test ({len(job.sections)} section(s))", emoji="✅",
                                style=discord.ButtonStyle.success)
         go.callback = self._go
         self.add_item(go)
@@ -493,7 +520,12 @@ class ConfirmMenu(_Owned):
 
     async def _go(self, i):
         self.stop()
-        await i.response.edit_message(content="⏳ Posting...", view=None)
+        await i.response.edit_message(content="⏳ Preparing the preview...", view=None)
+        pid = await self.cog.stage(self.job, self.data, i.user)
+        if pid:
+            tc = self.cog.bot.get_cog("Poster").test_channel()
+            await i.edit_original_response(content=f"👀 Preview in {tc.mention} — click **✅ Post now** there.")
+            return
         text = await self.cog.post(self.job, self.data, i.user)
         await i.edit_original_response(content=text)
 

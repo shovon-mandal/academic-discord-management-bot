@@ -89,12 +89,33 @@ class Attendance(commands.Cog):
         self._save()
 
     # ------------------------------------------------------------ public API (used by commands + panel)
-    async def start_session(self, sec: str, course: str | None, minutes: int, by: str):
+    def _open_text(self, sec, course, minutes):
+        info = self.s.courses[course]
+        role = self.bot.role_for(f"role:sec:{sec}")
+        return (f"{role.mention if role else ''} 🟢 **Attendance is open** for {info['code']} "
+                f"{info['short']} — join **🔊 voice channel** of this section now."
+                + (f" (closes in {minutes} min)" if minutes else ""))
+
+    async def start_session(self, sec: str, course: str | None, minutes: int, by: str, approved: bool = False):
         if sec in self.sessions:
             raise commands.BadArgument(f"Attendance for {sec} is already running. Stop it first.")
         course = course or self.s.default_course(sec)
         if course not in self.s.section_courses(sec):
             raise commands.BadArgument(f"{course} is not a course of {sec}.")
+        poster = self.bot.get_cog("Poster")
+        if not approved and poster and poster.test_channel():
+            ann = self.bot.channel_for(f"sec:{sec}:announcement")
+            text = self._open_text(sec, course, minutes)
+            info = [f"▶️ **Starts attendance** for **{sec} · {self.s.courses[course]['code']}** when you click ✅",
+                    f"📍 **Where:** {ann.mention if ann else '—'} ({ann.category.name if ann and ann.category else ''})",
+                    f"🔔 **Mention:** @{sec}", "When you stop it, this is posted too: 🔴 Attendance is closed. Thank you!"]
+
+            async def render(tc):
+                await tc.send(text, allowed_mentions=discord.AllowedMentions.none())
+            await poster.gate("attendance", {"sec": sec, "course": course, "minutes": minutes, "by": by},
+                              f"Attendance · {sec}", info, render, 1, None)
+            return (f"👀 Preview in {poster.test_channel().mention} — click **✅ Post now** there to start "
+                    f"attendance for {sec}.")
         now = self.s.now()
         self.sessions[sec] = {
             "section": sec, "course": course, "started_at": now.isoformat(timespec="seconds"),
@@ -109,12 +130,9 @@ class Attendance(commands.Cog):
                     self._join(sec, m, vc.name, now)
         info = self.s.courses[course]
         ann = self.bot.channel_for(f"sec:{sec}:announcement")
-        role = self.bot.role_for(f"role:sec:{sec}")
         if ann:
             try:
-                await ann.send(f"{role.mention if role else ''} 🟢 **Attendance is open** for {info['code']} "
-                               f"{info['short']} — join **🔊 voice channel** of this section now."
-                               + (f" (closes in {minutes} min)" if minutes else ""))
+                await ann.send(self._open_text(sec, course, minutes))
             except discord.HTTPException:
                 pass
         return (f"🟢 Attendance started: **{sec} · {info['code']} {info['short']}**"

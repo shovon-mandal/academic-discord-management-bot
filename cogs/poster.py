@@ -102,6 +102,25 @@ class Draft:
         self.expire = ""             # auto-delete: "today", "3h", "2d" … ("" = keep)
 
 
+def draft_to_dict(d: Draft) -> dict:
+    return {k: v for k, v in d.__dict__.items() if k != "files"} | {"file_names": [n for n, _ in d.files]}
+
+
+def draft_from_dict(data: dict, folder) -> Draft:
+    d = Draft()
+    for k, v in data.items():
+        if k != "file_names":
+            setattr(d, k, v)
+    d.buttons = [tuple(x) for x in d.buttons]
+    d.files = []
+    for n in data.get("file_names", []):
+        try:
+            d.files.append((n, (folder / n).read_bytes()))
+        except OSError:
+            pass
+    return d
+
+
 class Poster(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -329,6 +348,7 @@ class Poster(commands.Cog):
         return last
 
     async def post(self, d: Draft, guild, who) -> str:
+        guild = guild or self.bot.main_guild()
         ok, bad = [], []
         exp = self.expire_at(d.expire)
         sent_msgs = []
@@ -377,6 +397,263 @@ class Poster(commands.Cog):
                      f"🔗 Buttons: **{len(d.buttons) + nlinks}**")
         return "\n".join(lines)
 
+    # ------------------------------------------------------------ preview in 🤖┃bot-test before posting
+    def _pv_path(self):
+        from core.config import DATA_DIR
+        return DATA_DIR / "preview_posts.json"
+
+    def _pv_files(self, pid):
+        from core.config import DATA_DIR
+        return DATA_DIR / "preview_files" / pid
+
+    def _pv_load(self):
+        from core.storage import load_json
+        return load_json(self._pv_path(), {})
+
+    def _pv_save(self, data):
+        from core.storage import save_json
+        save_json(self._pv_path(), data)
+
+    def test_channel(self):
+        return self.bot.channel_for("test_channel")
+
+    def _pv_view(self, pid, kind, n_targets):
+        v = discord.ui.View(timeout=None)
+        label = {"rem_ok": "Approve (send at its time)", "job": "Approve (post at its time)"}.get(
+            kind, f"Post now ({n_targets})")
+        v.add_item(discord.ui.Button(label=label, emoji="✅", style=discord.ButtonStyle.success,
+                                     custom_id=f"nubtk:pv:post:{pid}"))
+        if kind in ("post", "event"):
+            v.add_item(discord.ui.Button(label="Edit", emoji="✏️", style=discord.ButtonStyle.secondary,
+                                         custom_id=f"nubtk:pv:edit:{pid}"))
+        v.add_item(discord.ui.Button(label="Cancel", emoji="❌", style=discord.ButtonStyle.danger,
+                                     custom_id=f"nubtk:pv:cancel:{pid}"))
+        v.stop()
+        return v
+
+    async def stage(self, kind: str, data: dict, header: discord.Embed, render, n_targets: int, by, files=None,
+                    replace: str | None = None) -> str | None:
+        """Post a PREVIEW in 🤖┃bot-test (header: where / who is mentioned + the message itself) with
+        ✅ Post now / ✏️ Edit / ❌ Cancel. Returns the preview id, or None if there is no test channel."""
+        import secrets
+        ch = self.test_channel()
+        if ch is None:
+            return None
+        allp = self._pv_load()
+        if replace and replace in allp:
+            await self._pv_close(replace, "♻️ Replaced by a newer preview below.")
+            allp = self._pv_load()
+        pid = secrets.token_hex(4)
+        if files:
+            folder = self._pv_files(pid)
+            folder.mkdir(parents=True, exist_ok=True)
+            for n, b in files:
+                (folder / n).write_bytes(b)
+        header.set_footer(text="Nothing is posted until you click ✅ Post now · only admins see this channel")
+        msg = await ch.send(embed=header, view=self._pv_view(pid, kind, n_targets),
+                            allowed_mentions=discord.AllowedMentions.none())
+        try:
+            await render(ch)
+        except discord.HTTPException as e:
+            await ch.send(f"⚠️ Preview problem: `{e.text or e}`")
+        allp[pid] = {"kind": kind, "data": data, "by": getattr(by, "id", 0), "msg": [ch.id, msg.id],
+                     "created": self.bot.settings.now_str()}
+        self._pv_save(allp)
+        return pid
+
+    async def _pv_close(self, pid, text):
+        import shutil
+        allp = self._pv_load()
+        it = allp.pop(pid, None)
+        self._pv_save(allp)
+        shutil.rmtree(self._pv_files(pid), ignore_errors=True)
+        if not it:
+            return
+        try:
+            m = self.bot.get_channel(int(it["msg"][0])).get_partial_message(int(it["msg"][1]))
+            await m.edit(content=text, view=None)
+        except (discord.HTTPException, AttributeError):
+            pass
+
+    # ---- generic gate used by every part of the bot that posts for students
+    async def gate(self, kind, data, title, info_lines, render, n_targets, by, files=None, replace=None,
+                   buttons="post") -> str | None:
+        e = discord.Embed(title=f"👀 PREVIEW — {title} (not posted yet)", color=discord.Color.gold(),
+                          description="\n".join(info_lines)[:4000])
+        return await self.stage(kind, data, e, render, n_targets, by, files=files, replace=replace)
+
+    async def notify_staged(self, ctx_or_inter, pid):
+        ch = self.test_channel()
+        text = (f"👀 Preview posted in {ch.mention if ch else '#bot-test'} — it shows exactly how it will look, "
+                "where it goes and who is mentioned. Click **✅ Post now** there (or ✏️ Edit / ❌ Cancel).")
+        try:
+            if isinstance(ctx_or_inter, discord.Interaction):
+                if ctx_or_inter.response.is_done():
+                    await ctx_or_inter.followup.send(text, ephemeral=True)
+                else:
+                    await ctx_or_inter.response.send_message(text, ephemeral=True)
+            else:
+                await ctx_or_inter.send(text)
+        except discord.HTTPException:
+            pass
+
+    def approved_ctx(self, user, files=None):
+        bot = self.bot
+        adm = bot.channel_for("admin_channel")
+
+        class _Att:
+            def __init__(self, n, b):
+                self.filename, self._b = n, b
+
+            async def read(self):
+                return self._b
+
+            async def to_file(self):
+                return discord.File(io.BytesIO(self._b), filename=self.filename)
+
+        class _Ctx:
+            approved = True
+            guild = bot.main_guild()
+            author = user
+            channel = adm
+            message = type("Msg", (), {"attachments": [_Att(n, b) for n, b in (files or [])]})()
+
+            @staticmethod
+            async def send(content=None, **kw):
+                return await adm.send(content, **kw) if adm else None
+        return _Ctx
+
+    async def run_approved(self, kind, data, user, files):
+        """The work behind ✅ Post now for every kind of preview. Returns a short result text."""
+        r = self.bot.get_cog("Routine")
+        admin = self.bot.get_cog("Admin")
+        panel = self.bot.get_cog("Panel")
+        if kind == "announce":
+            await admin._announce(self.approved_ctx(user, files), data["target"], data["text"], data["ping"],
+                                  title=data.get("title") or "📢 Announcement")
+            return f"✅ Announcement posted → {data['target']}"
+        if kind == "cmd":
+            cmd = self.bot.get_command(data["name"])
+            await cmd.callback(cmd.cog, self.approved_ctx(user, files), *data.get("args", []), **data.get("kwargs", {}))
+            return f"✅ `{data['name']}` done — the summary is in the admin channel."
+        if kind == "event":
+            secs = await r.announce_event(data["eid"], data.get("mode", "new"))
+            return f"✅ Announced in: {', '.join(secs) or 'nothing (channel missing?)'}"
+        if kind == "change":
+            ok = await r.announce_change(data["cid"])
+            return "✅ Announced in the section." if ok else "⚠️ Could not post (announcement channel missing?)."
+        if kind == "reminder":
+            secs = await r.send_reminder(data["eid"], data.get("secs") or None, approved=True)
+            return f"✅ Reminder sent to: {', '.join(secs) or 'nothing'}"
+        if kind == "rem_ok":
+            r.approve_reminder(data["eid"], data["which"])
+            return "✅ Approved — it will be sent automatically at its time."
+        if kind == "job":
+            if data["jid"] in panel.jobs:
+                panel.jobs[data["jid"]]["ok"] = True
+                panel.save_jobs()
+                return "✅ Approved — it will be posted at its time."
+            return "⚠️ That scheduled post no longer exists."
+        if kind == "msgrem":
+            await panel.post_reminder(data["target"], data["link"], data["snapshot"], data.get("note", ""))
+            return f"✅ Reminder posted → {data['target']}"
+        if kind == "subs":
+            sub = self.bot.get_cog("Submissions")
+            return await sub.post_prepared(data, user)
+        if kind == "attendance":
+            att = self.bot.get_cog("Attendance")
+            return await att.start_session(data["sec"], data["course"], data["minutes"], data.get("by") or user.name,
+                                           approved=True)
+        if kind == "routine":
+            rep, _ = await r.check(force_repost=bool(data.get("force")), apply=True)
+            return "✅ Routine updated in the sections."
+        return "?"
+
+    # ---- previews for "Post as bot"
+    def post_header(self, d: Draft, guild) -> discord.Embed:
+        e = discord.Embed(title="👀 PREVIEW — Post as bot (not posted yet)", color=discord.Color.gold(),
+                          description=self.preview_text(d, guild).split("\n", 1)[1] if "\n" in self.preview_text(d, guild)
+                          else "")
+        return e
+
+    async def stage_post(self, d: Draft, guild, by, replace=None):
+        sample = Draft()
+        sample.__dict__.update(d.__dict__)
+        sample.mention = "none"
+
+        async def render(ch):
+            if d.linkbuttons:
+                await ch.send(view=self.build_layout(sample),
+                              files=[discord.File(io.BytesIO(b), filename=n) for n, b in d.files])
+                return
+            payloads = self._payloads(sample, "")
+            for i, p in enumerate(payloads):
+                kw = {k: v for k, v in p.items() if v}
+                if i == len(payloads) - 1:
+                    v = self._view(d)
+                    if v:
+                        kw["view"] = v
+                    if d.files:
+                        kw["files"] = [discord.File(io.BytesIO(b), filename=n) for n, b in d.files]
+                if kw:
+                    await ch.send(allowed_mentions=discord.AllowedMentions.none(), **kw)
+        return await self.stage("post", draft_to_dict(d), self.post_header(d, guild), render, len(d.channels), by,
+                                files=d.files, replace=replace)
+
+    @commands.Cog.listener("on_interaction")
+    async def _pv_interaction(self, interaction: discord.Interaction):
+        if interaction.type != discord.InteractionType.component:
+            return
+        cid = (interaction.data or {}).get("custom_id", "")
+        if not cid.startswith("nubtk:pv:"):
+            return
+        if not self.bot.is_admin(interaction.user):
+            await interaction.response.send_message("Only the teacher can use this.", ephemeral=True)
+            return
+        _, _, action, pid = cid.split(":", 3)
+        it = self._pv_load().get(pid)
+        if it is None:
+            await interaction.response.send_message("This preview is finished or was replaced.", ephemeral=True)
+            return
+        kind, data = it["kind"], it["data"]
+        r = self.bot.get_cog("Routine")
+        if action == "cancel":
+            if kind == "rem_ok" and r:
+                r.approve_reminder(data["eid"], data["which"], ok=False)
+            if kind == "job":
+                self.bot.get_cog("Panel").jobs.pop(data["jid"], None)
+                self.bot.get_cog("Panel").save_jobs()
+            await interaction.response.defer()
+            await self._pv_close(pid, f"❌ Cancelled by {interaction.user.mention} — nothing was posted.")
+            return
+        if action == "edit":
+            if kind == "post":
+                d = draft_from_dict(data, self._pv_files(pid))
+                await interaction.response.send_modal(PostModal(self, interaction.user.id, d, replace=pid))
+            elif kind == "event":
+                from cogs.panel import EventEditModal
+                await interaction.response.send_modal(EventEditModal(self.bot.get_cog("Panel"), data["eid"], None,
+                                                                     restage=pid))
+            return
+        # post now
+        await interaction.response.defer()
+        try:
+            if kind == "post":
+                d = draft_from_dict(data, self._pv_files(pid))
+                text = await self.post(d, interaction.guild, interaction.user)
+            else:
+                files = []
+                folder = self._pv_files(pid)
+                if folder.exists():
+                    files = [(f.name, f.read_bytes()) for f in sorted(folder.iterdir())]
+                text = await self.run_approved(kind, data, interaction.user, files)
+        except Exception as e:  # noqa: BLE001
+            log.exception("approve %s failed", kind)
+            await interaction.followup.send(f"❌ Failed: `{str(e)[:300]}` — the preview is kept, try again.",
+                                            ephemeral=True)
+            return
+        await self._pv_close(pid, f"{text}\nby {interaction.user.mention}")
+
     # ------------------------------------------------------------ text command
     @commands.command(name="post")
     async def post_cmd(self, ctx, *, rest: str = ""):
@@ -404,6 +681,9 @@ class Poster(commands.Cog):
             d.files.append((a.filename, await a.read()))
         if not (d.text or d.files):
             raise commands.BadArgument("Write a message or attach a file.")
+        if await self.stage_post(d, ctx.guild, ctx.author):
+            await ctx.send(f"👀 Preview posted in {self.test_channel().mention} — check it and click **✅ Post now** there.")
+            return
         v = PreviewView(self, ctx.author.id, d)
         await ctx.send(self.preview_text(d, ctx.guild), view=v, allowed_mentions=discord.AllowedMentions.none())
 
@@ -453,7 +733,12 @@ class PostMenu(_Owned):
                         found.setdefault(c.name, []).append(c)
                 except Exception:  # noqa: BLE001
                     pass
-        self.groups = list(found.items())[:25]
+        total = sum(len(v) for v in found.values())
+        if total <= 25:  # every channel on its own line, with its category (Section 3D …)
+            self.groups = [(f"{c.name} · {c.category.name if c.category else '—'}", [c])
+                           for chans in found.values() for c in chans]
+        else:
+            self.groups = list(found.items())[:25]
         self.picked = {i for i in self.picked if i < len(self.groups)}
 
     def _build(self):
@@ -568,9 +853,9 @@ class PostMenu(_Owned):
 
 
 class PostModal(discord.ui.Modal):
-    def __init__(self, cog, user_id, d: Draft):
+    def __init__(self, cog, user_id, d: Draft, replace=None):
         super().__init__(title="📤 Post as bot", timeout=1800)
-        self.cog, self.user_id, self.d = cog, user_id, d
+        self.cog, self.user_id, self.d, self.replace = cog, user_id, d, replace
         self.title_in = discord.ui.TextInput(style=discord.TextStyle.short, required=False, max_length=200,
                                              default=d.title or None, placeholder="e.g. Attendance sheet — Week 6")
         self.text_in = discord.ui.TextInput(style=discord.TextStyle.paragraph, required=False, max_length=4000,
@@ -611,9 +896,14 @@ class PostModal(discord.ui.Modal):
         if not (d.text or d.files or d.title):
             await interaction.followup.send("⚠️ Write a message or add a file.", ephemeral=True)
             return
-        text = self.cog.preview_text(d, interaction.guild)
-        if bad:
-            text += "\n⚠️ Not a link (ignored): " + ", ".join(f"`{b[:60]}`" for b in bad)
+        warn = ("\n⚠️ Not a link (ignored): " + ", ".join(f"`{b[:60]}`" for b in bad)) if bad else ""
+        pid = await self.cog.stage_post(d, interaction.guild, interaction.user, replace=self.replace)
+        if pid:
+            await interaction.followup.send(f"👀 Preview posted in {self.cog.test_channel().mention} — it shows where it "
+                                            "goes and who is mentioned. Click **✅ Post now** there (or ✏️ Edit / ❌ Cancel)."
+                                            + warn, ephemeral=True)
+            return
+        text = self.cog.preview_text(d, interaction.guild) + warn
         await interaction.followup.send(text, ephemeral=True, view=PreviewView(self.cog, self.user_id, d))
         # show exactly how it will look (only to the teacher)
         sample = Draft()

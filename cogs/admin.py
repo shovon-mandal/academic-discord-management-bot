@@ -326,6 +326,15 @@ class Admin(commands.Cog):
                          f"Or type in {idc.mention if idc else '#id-name-section'}: "
                          f"`{list(self.s.sections)[0]} 11250121964 Your Full Name`"),
             color=GOLD)
+        poster = self.bot.get_cog("Poster")
+        if not getattr(ctx, "approved", False) and poster and poster.test_channel():
+            async def render(tc):
+                await tc.send(embed=embed)
+            pid = await poster.gate("cmd", {"name": "notify_unverified"}, "Remind unverified",
+                                    [f"📩 DM to **{len(targets)}** unverified members + a mention in the ID channel"],
+                                    render, len(targets), ctx.author)
+            await msg.edit(content="👀 Preview posted in the bot-test channel — click ✅ Post now there.")
+            return
         for m in targets:
             try:
                 await m.send(embed=embed)
@@ -409,11 +418,24 @@ class Admin(commands.Cog):
             raise commands.BadArgument("Announcement channel not found. Run `!setup_server`.")
         if not text and not ctx.message.attachments:
             raise commands.BadArgument("Write the announcement text after the target.")
-        files = [await a.to_file() for a in ctx.message.attachments[:10]]
         embed = discord.Embed(title=title or "📢 Announcement", description=text or None, color=GOLD,
                               timestamp=self.s.now())
         embed.set_footer(text=f"{self.s.teacher} · {label}")
         content = " ".join(r.mention for r in roles if r) if ping else None
+        poster = self.bot.get_cog("Poster")
+        if not getattr(ctx, "approved", False) and poster and poster.test_channel():
+            raw = [(a.filename, await a.read()) for a in ctx.message.attachments[:10]]
+            info = [f"📍 **Where:** {ch.mention} ({ch.category.name if ch.category else ''})",
+                    f"🔔 **Mention:** {content or 'nobody'}", f"📎 Files: {len(raw)}"]
+
+            async def render(tc):
+                await tc.send(content=content, embed=embed, allowed_mentions=discord.AllowedMentions.none(),
+                              files=[discord.File(io.BytesIO(b), filename=n) for n, b in raw])
+            pid = await poster.gate("announce", {"target": target, "text": text, "ping": ping, "title": title},
+                                    f"Announcement → {label}", info, render, 1, ctx.author, files=raw)
+            await poster.notify_staged(ctx, pid)
+            return
+        files = [await a.to_file() for a in ctx.message.attachments[:10]]
         kwargs = {"embed": embed}
         if content:
             kwargs["content"] = content
@@ -436,10 +458,19 @@ class Admin(commands.Cog):
         if not kind:
             raise commands.BadArgument("Target must be `all`, `3D`, or `CSE2109`.")
         _, _, recipients, label = self.target_info(kind, val)
-        status = await ctx.send(f"⏳ Sending DM to {len(recipients)} students ({label})...")
         embed = discord.Embed(title=f"📩 Message from {self.s.teacher}", description=text, color=BLUE,
                               timestamp=self.s.now())
         embed.set_footer(text=f"{ctx.guild.name} · {label}")
+        poster = self.bot.get_cog("Poster")
+        if not getattr(ctx, "approved", False) and poster and poster.test_channel():
+            async def render(tc):
+                await tc.send(embed=embed)
+            pid = await poster.gate("cmd", {"name": "dm", "args": [target], "kwargs": {"text": text}},
+                                    f"DM → {label}", [f"📩 **Private DM** to **{len(recipients)}** students ({label})"],
+                                    render, len(recipients), ctx.author)
+            await poster.notify_staged(ctx, pid)
+            return
+        status = await ctx.send(f"⏳ Sending DM to {len(recipients)} students ({label})...")
         sent, failed = 0, []
         for r in recipients:
             m = ctx.guild.get_member(int(r["discord_id"]))
@@ -483,6 +514,31 @@ class Admin(commands.Cog):
         by_sid = {}
         for rec in self.bot.store.all_active():
             by_sid.setdefault(rec["student_id"], rec)
+        poster = self.bot.get_cog("Poster")
+        if not getattr(ctx, "approved", False) and poster and poster.test_channel():
+            sample = []
+            for r in rows[1:3]:
+                sid = r[id_col] if id_col < len(r) else ""
+                rec = by_sid.get(sid) or {"name": "(not registered)", "section": "?"}
+                e = discord.Embed(title=f"📊 {title}", color=BLUE, timestamp=self.s.now(),
+                                  description=f"**{rec['name']}** · `{sid}` · Section {rec['section']}")
+                for i, h in enumerate(header[:25]):
+                    if i != id_col and i < len(r) and h:
+                        e.add_field(name=h[:256], value=(r[i] or "-")[:1024], inline=True)
+                e.set_footer(text=f"{self.s.teacher} · private — only you can see this")
+                sample.append(e)
+            known = sum(1 for r in rows[1:] if (r[id_col] if id_col < len(r) else "") in by_sid)
+
+            async def render(tc):
+                await tc.send(content="Example (first students):", embeds=sample)
+            pid = await poster.gate("cmd", {"name": "marks_dm", "args": [], "kwargs": {"title": title}},
+                                    f"Marks by DM · {title}",
+                                    [f"📊 Each student gets **only their own** marks by DM",
+                                     f"Rows: **{len(rows) - 1}** · registered: **{known}** · not registered: "
+                                     f"**{len(rows) - 1 - known}**"], render, known, ctx.author,
+                                    files=[(att.filename, raw)])
+            await poster.notify_staged(ctx, pid)
+            return
         status = await ctx.send(f"⏳ Sending marks to {len(rows) - 1} students...")
         sent, failed, unknown = 0, [], []
         for r in rows[1:]:

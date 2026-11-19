@@ -667,16 +667,20 @@ class Routine(commands.Cog):
                 out.append(pre + self.change_text(c, True))
         return out
 
+    def change_embed(self, c):
+        color = {"cancel": discord.Color.red(), "online": discord.Color.blue()}.get(c["kind"], discord.Color.orange())
+        title = {"cancel": "🚫 Class cancelled", "online": "💻 Class will be ONLINE"}.get(c["kind"], "🔁 Class rescheduled")
+        emb = discord.Embed(title=title, description=self.change_text(c), color=color)
+        emb.set_footer(text=f"{self.s.teacher} · Section {c['sec']} · also shown under 📅 in 🗓️┃routine-and-deadlines")
+        return emb
+
     async def announce_change(self, cid) -> bool:
         c = self._changes()[cid]
         ch = self.bot.channel_for(f"sec:{c['sec']}:announcement")
         if ch is None:
             return False
         role = self.bot.role_for(f"role:sec:{c['sec']}")
-        color = {"cancel": discord.Color.red(), "online": discord.Color.blue()}.get(c["kind"], discord.Color.orange())
-        title = {"cancel": "🚫 Class cancelled", "online": "💻 Class will be ONLINE"}.get(c["kind"], "🔁 Class rescheduled")
-        emb = discord.Embed(title=title, description=self.change_text(c), color=color)
-        emb.set_footer(text=f"{self.s.teacher} · Section {c['sec']} · also shown under 📅 in 🗓️┃routine-and-deadlines")
+        emb = self.change_embed(c)
         try:
             await ch.send(content=role.mention if role else None, embed=emb,
                           allowed_mentions=discord.AllowedMentions(roles=True))
@@ -746,7 +750,101 @@ class Routine(commands.Cog):
         except (discord.HTTPException, AttributeError):
             return None
 
-    async def send_reminder(self, eid, secs=None, auto=False) -> list:
+    def approve_reminder(self, eid, which, ok=True):
+        ev = self._events().get(eid)
+        if not ev:
+            return
+        if which == "auto":
+            ev["auto_ok"] = ok
+        else:
+            rems = ev.get("custom_reminders") or []
+            if 0 <= int(which) < len(rems):
+                rems[int(which)]["ok"] = ok
+        self.save_events()
+
+    async def stage_reminder_approval(self, eid, which):
+        """Preview of an automatic / scheduled reminder in 🤖┃bot-test → ✅ Approve (sent at its time)."""
+        poster = self.bot.get_cog("Poster")
+        ev = self._events().get(eid)
+        if not poster or not ev or not poster.test_channel():
+            return False
+        secs = self.expand_secs(ev["sections"])
+        if which == "auto":
+            when = ", ".join(f"{x} {self.reminder_due(ev, x):%a %d %b %I:%M %p}" for x in secs)
+            kind_txt = "Automatic reminder"
+        else:
+            rem = ev["custom_reminders"][int(which)]
+            when = f"{_dt_fromiso(rem['at']):%a %d %b %I:%M %p}"
+            secs = rem.get("secs") or secs
+            kind_txt = "Scheduled reminder"
+        info = [f"⏰ **When:** {when}", f"📍 **Where:** reply to the main post of **{ev['title']}** in each section's "
+                f"channel ({', '.join(secs)})", f"🔔 **Mention:** " + ", ".join(f"@{x}" for x in secs),
+                "Not approved = not sent."]
+        sec = secs[0] if secs else None
+        main = await self._main_message(ev, sec) if sec else None
+
+        async def render(ch):
+            await ch.send(content=(f"↪️ reply to: {main.jump_url}" if main else "") or None,
+                          embed=self._reminder_embed(ev, sec, auto=(which == "auto")))
+        pid = await poster.gate("rem_ok", {"eid": eid, "which": which}, f"{kind_txt} · {ev['title']}", info, render,
+                                len(secs), None)
+        return bool(pid)
+
+    async def stage_reminder_now(self, eid, secs, by):
+        poster = self.bot.get_cog("Poster")
+        ev = self._events().get(eid)
+        if not poster or not ev or not poster.test_channel():
+            return None
+        secs = secs or self.expand_secs(ev["sections"])
+        sec = secs[0]
+        main = await self._main_message(ev, sec)
+        info = [f"📍 **Where:** reply to the main post in each section's channel ({', '.join(secs)})",
+                f"🔔 **Mention:** " + ", ".join(f"@{x}" for x in secs)]
+
+        async def render(ch):
+            await ch.send(content=(f"↪️ reply to: {main.jump_url}" if main else "") or None,
+                          embed=self._reminder_embed(ev, sec))
+        return await poster.gate("reminder", {"eid": eid, "secs": secs}, f"Reminder · {ev['title']}", info, render,
+                                 len(secs), by)
+
+    async def stage_event(self, eid, by, mode="new", replace=None):
+        poster = self.bot.get_cog("Poster")
+        ev = self._events().get(eid)
+        if not poster or not ev or not poster.test_channel():
+            return None
+        secs = self.expand_secs(ev["sections"])
+        where = []
+        for x in secs:
+            ch = self.target_channel(ev, x)
+            if ch:
+                where.append(f"{ch.mention} ({ch.category.name if ch.category else ''})")
+        info = [("✏️ **Fix the existing posts silently** (no notification)" if mode == "edit" else
+                 "📢 **New post** (students are notified)"),
+                "📍 **Where:** " + (", ".join(where) or "—"),
+                "🔔 **Mention:** " + (", ".join(f"@{x}" for x in secs) if mode != "edit" else "nobody (edit)")]
+        if mode != "edit":
+            info.append("⏰ Automatic reminder: asked separately for approval.")
+        sec = secs[0] if secs else None
+
+        async def render(ch):
+            await ch.send(content=f"`@{sec}`" if mode != "edit" else None, embed=self.event_embed(ev, sec))
+        return await poster.gate("event", {"eid": eid, "mode": mode}, f"{self.EVENT_TYPES.get(ev['kind'], ('', ''))[0]} · "
+                                 f"{ev['title']}", info, render, len(secs), by, replace=replace)
+
+    async def stage_change(self, cid, by):
+        poster = self.bot.get_cog("Poster")
+        c = self._changes().get(cid)
+        if not poster or not c or not poster.test_channel():
+            return None
+        ch = self.bot.channel_for(f"sec:{c['sec']}:announcement")
+        info = [f"📍 **Where:** {ch.mention if ch else '—'} ({ch.category.name if ch and ch.category else ''})",
+                f"🔔 **Mention:** @{c['sec']}"]
+
+        async def render(tc):
+            await tc.send(content=f"`@{c['sec']}`", embed=self.change_embed(c))
+        return await poster.gate("change", {"cid": cid}, f"Class change · {c['sec']}", info, render, 1, by)
+
+    async def send_reminder(self, eid, secs=None, auto=False, approved=True) -> list:
         """Reminder = a REPLY to the main announcement, in the same channel (lab → 🧪┃lab)."""
         ev = self._events().get(eid)
         if not ev:
@@ -790,10 +888,19 @@ class Routine(commands.Cog):
         changed = False
         for eid, ev in list(self._events().items()):
             done_ = set(ev.get("auto_reminded") or [])
+            ready = ev.get("msgs") or ev.get("no_announce") or "created_at" not in ev
+            if ev.get("auto_ok") is None and not ev.get("auto_staged") and ready and self.event_when(ev) > now:
+                if await self.stage_reminder_approval(eid, "auto"):
+                    ev["auto_staged"] = True
+                    changed = True
             for sec in self.expand_secs(ev["sections"]):
                 if sec in done_:
                     continue
                 due, w = self.reminder_due(ev, sec), self.event_when(ev, sec)
+                if due <= now < w and ev.get("auto_ok") is not True:
+                    done_.add(sec)  # not approved in time → not sent (nothing goes out without a preview)
+                    changed = True
+                    continue
                 if due <= now < w:
                     created = ev.get("created_at")
                     if created and created > due.isoformat() and ev["kind"] != "online":
@@ -803,8 +910,17 @@ class Routine(commands.Cog):
                         done_.add(sec)
                     changed = True
             ev["auto_reminded"] = sorted(done_)
-            for rem in ev.get("custom_reminders") or []:  # reminders the teacher scheduled by hand
+            for idx, rem in enumerate(ev.get("custom_reminders") or []):  # reminders scheduled by hand
                 if rem.get("done"):
+                    continue
+                if rem.get("ok") is None and not rem.get("staged"):
+                    if await self.stage_reminder_approval(eid, idx):
+                        rem["staged"] = True
+                        changed = True
+                if rem.get("ok") is not True:
+                    if _dt_fromiso(rem["at"]) <= now:
+                        rem["done"] = True  # not approved → not sent
+                        changed = True
                     continue
                 at = _dt_fromiso(rem["at"])
                 if at <= now:
@@ -814,6 +930,18 @@ class Routine(commands.Cog):
                     changed = True
         if changed:
             self.save_events()
+
+    def event_embed(self, ev, sec):
+        name, icon = self.EVENT_TYPES.get(ev["kind"], ("Other", "📌"))
+        w = self.event_when(ev, sec)
+        emb = discord.Embed(title=f"{icon} {name}: {ev['title']}", color=discord.Color.orange(),
+                            description=(f"🗓️ **{w:%A, %d %B %Y}**\n⏰ **{w:%I:%M %p}**"
+                                         + (f"\n📍 Join: {self.event_place(ev, sec).mention}"
+                                            if ev["kind"] == "online" and self.event_place(ev, sec) else "")
+                                         + (f"\n\n{ev['details']}" if ev.get("details") else "")))
+        emb.set_footer(text=f"{self.s.teacher} · Section {sec} · also shown under 📅 in 🗓️┃routine-and-deadlines"
+                            + (" · ✏️ updated" if ev.get("edited") else ""))
+        return emb
 
     async def announce_event(self, eid, mode: str = "new"):
         """mode 'new' = post (and notify) · 'edit' = edit the earlier announcements in place (no notification)."""
@@ -963,10 +1091,33 @@ class Routine(commands.Cog):
         return msg.id
 
     # ------------------------------------------------------------ main check
-    async def check(self, force_repost: bool = False, post_summary: bool = True):
-        """Returns (report_text, any_changed)."""
+    async def _stage_routine(self, pending, force):
+        poster = self.bot.get_cog("Poster")
+        old = [pid for pid, it in poster._pv_load().items() if it["kind"] == "routine"]
+        info = [f"📍 Pinned routine in **🗓️┃routine-and-deadlines** of: {', '.join(p[0] for p in pending)}",
+                "The old routine message is replaced (no change-log). Below: how section "
+                f"**{pending[0][0]}** will look."]
+        for sec, items, eff, upd, added, removed, first in pending[:10]:
+            if first:
+                info.append(f"**{sec}**: first routine post ({len(items)} classes)")
+            elif added or removed:
+                info.append(f"**{sec}**: " + " · ".join([f"➕ {a}" for a in added[:4]] + [f"➖ {x}" for x in removed[:4]])[:300])
+            else:
+                info.append(f"**{sec}**: layout / effective date refresh")
+        sec, items, eff, upd = pending[0][:4]
+        embeds, files = await self.routine_message(sec, items, eff, upd)
+
+        async def render(ch):
+            await ch.send(embeds=embeds, files=files, view=self._link_view())
+        await poster.gate("routine", {"force": bool(force)}, "Routine update", info, render, len(pending), None,
+                          replace=old[0] if old else None)
+
+    async def check(self, force_repost: bool = False, post_summary: bool = True, apply: bool = False):
+        """Returns (report_text, any_changed). Nothing is posted for students unless apply=True:
+        changes are first shown as a PREVIEW in 🤖┃bot-test (✅ Post now → check(apply=True))."""
         routines, eff_by_sheet = await self.build()
         lines, any_changed = [], False
+        pending = []
         effs = {v for v in eff_by_sheet.values() if v}
         for sec, items in routines.items():
             sheets = [e.get("sheet") for e in items if e.get("sheet")]
@@ -986,7 +1137,13 @@ class Routine(commands.Cog):
             updated = prev.get("updated") or ""
             if first_time or changed or eff_changed or not updated:
                 updated = self.s.now().strftime("%d %b %Y, %I:%M %p")
-            if first_time or changed or eff_changed or force_repost or not prev.get("msg_id"):
+            needs = first_time or changed or eff_changed or force_repost or not prev.get("msg_id")
+            poster = self.bot.get_cog("Poster")
+            if needs and not apply and poster and poster.test_channel():
+                pending.append((sec, items, effective, updated, added, removed, first_time))
+                lines.append(f"• **{sec}** — ⏳ change found → waiting for ✅ in {poster.test_channel().mention}")
+                continue
+            if needs:
                 embeds, files = await self.routine_message(sec, items, effective, updated)
                 mid = await self._replace_pinned(sec, embeds, files)
                 prev = {"entries": items, "effective": effective, "msg_id": mid, "updated": updated}
@@ -1000,6 +1157,8 @@ class Routine(commands.Cog):
             else:
                 lines.append(f"• **{sec}** — ✅ no change ({len(items)} classes, {len(self.mine(items))} yours)")
         save_json(STATE_FILE, self.state)
+        if pending:
+            await self._stage_routine(pending, force_repost)
         report = f"🗓️ **Routine check** · effective from **{', '.join(sorted(effs)) or '—'}**\n" + "\n".join(lines)
         return report, any_changed
 
