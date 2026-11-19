@@ -128,16 +128,45 @@ class CleanWelcomeMenu(BaseMenu):
         self.add_item(b)
 
     async def _go(self, interaction, mode):
+        async def run(i):
+            await run_command(i, "clean_welcome", mode)
+            await done(i)
+        if mode == "all":  # deletes messages of students who are still waiting → safety lock
+            await interaction.response.send_modal(TypedConfirmModal("CLEAN", run, self))
+            return
         self.stop()
         await interaction.response.edit_message(content="⏳ Cleaning...", view=None)
-        await run_command(interaction, "clean_welcome", mode)
-        await done(interaction)
+        await run(interaction)
+
+
+class TypedConfirmModal(discord.ui.Modal):
+    """Safety lock: the teacher must TYPE a word before something big/irreversible runs."""
+
+    def __init__(self, word, on_confirm, view=None):
+        super().__init__(title="⚠️ Are you sure?", timeout=300)
+        self.word, self.on_confirm, self.view_ = word, on_confirm, view
+        self.inp = discord.ui.TextInput(label=f"Type {word} to continue", max_length=30, placeholder=word)
+        self.add_item(self.inp)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if self.inp.value.strip().upper() != self.word.upper():
+            await interaction.response.send_message(f"❎ Not confirmed (you had to type `{self.word}`). Nothing changed.",
+                                                    ephemeral=True)
+            return
+        if self.view_ is not None:
+            self.view_.stop()
+        try:
+            await interaction.response.edit_message(content="⏳ Working...", view=None)
+        except discord.HTTPException:
+            await interaction.response.defer(ephemeral=True)
+        await self.on_confirm(interaction)
 
 
 class ConfirmView(BaseMenu):
-    def __init__(self, cog, user_id, on_confirm, label="Yes, continue", danger=True, timeout=120):
+    def __init__(self, cog, user_id, on_confirm, label="Yes, continue", danger=True, timeout=120, typed=None):
         super().__init__(cog, user_id, timeout)
         self.on_confirm = on_confirm
+        self.typed = typed
         yes = discord.ui.Button(label=label, style=discord.ButtonStyle.danger if danger else discord.ButtonStyle.success,
                                 emoji="⚠️" if danger else "✅")
         no = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
@@ -147,6 +176,9 @@ class ConfirmView(BaseMenu):
         self.add_item(no)
 
     async def _yes(self, interaction: discord.Interaction):
+        if self.typed:  # safety lock for sensitive actions
+            await interaction.response.send_modal(TypedConfirmModal(self.typed, self.on_confirm, self))
+            return
         self.stop()
         await interaction.response.edit_message(content="⏳ Working...", view=None)
         await self.on_confirm(interaction)
@@ -335,6 +367,7 @@ class EventMenu(BaseMenu):
         self.secs = []
         self.date = None
         self.where = None
+        self.target = "announcement"
         self._build()
 
     def _build(self):
@@ -363,6 +396,12 @@ class EventMenu(BaseMenu):
                                    disabled=True, options=[discord.SelectOption(label="—", value="x")])
         ds.callback = self._date
         self.add_item(ds)
+        if self.kind != "online":
+            tg = discord.ui.Select(placeholder="📍 Post it in…", row=3, options=[
+                discord.SelectOption(label=name, value=key, default=key == self.target)
+                for key, name in r.target_options()][:25])
+            tg.callback = self._target
+            self.add_item(tg)
         if self.kind == "online":
             cs = discord.ui.ChannelSelect(placeholder="📍 Where? (empty = each section's 🔊 voice channel)", row=3,
                                           min_values=0, max_values=1,
@@ -377,8 +416,13 @@ class EventMenu(BaseMenu):
 
     async def _kind(self, interaction):
         self.kind = interaction.data["values"][0]
+        self.target = self.cog.bot.get_cog("Routine").default_target(self.kind)
         self._build()
         await interaction.response.edit_message(view=self)
+
+    async def _target(self, interaction):
+        self.target = interaction.data["values"][0]
+        await interaction.response.defer()
 
     async def _where(self, interaction):
         vals = interaction.data.get("values", [])
@@ -401,17 +445,18 @@ class EventMenu(BaseMenu):
             await interaction.response.send_message("Choose the section(s) first.", ephemeral=True)
             return
         await interaction.response.send_modal(EventModal(self.cog, self.kind, self.secs, interaction, self.date,
-                                                         self.where))
+                                                         self.where, self.target))
 
 
 DATE_HELP = "Empty time = each section's class time on that day"
 
 
 class EventModal(discord.ui.Modal):
-    def __init__(self, cog, kind, secs, menu, day=None, where=None):
+    def __init__(self, cog, kind, secs, menu, day=None, where=None, target=None):
         name = cog.bot.get_cog("Routine").EVENT_TYPES[kind][0]
         super().__init__(title=f"📌 New {name}"[:45], timeout=900)
         self.cog, self.kind, self.secs, self.menu, self.where = cog, kind, secs, menu, where
+        self.target = target
         self.head = discord.ui.TextInput(label="Title", max_length=100, placeholder="e.g. Assignment 2 — Inheritance"
                                          if kind != "online" else "e.g. OOP II — Polymorphism (online)")
         self.when = discord.ui.TextInput(label="Date (time optional → class time)", max_length=60,
@@ -435,9 +480,10 @@ class EventModal(discord.ui.Modal):
         when, times = r.resolve_when(self.secs, got[0], got[1], got[2])
         eid = r.add_event(self.kind, self.head.value.strip(), self.secs, when, (self.details.value or "").strip(),
                           interaction.user.name, times)
+        r._events()[eid]["target"] = self.target or r.default_target(self.kind)
         if self.where:
             r._events()[eid]["where"] = self.where
-            r.save_events()
+        r.save_events()
         posted = []
         if (self.announce.value or "yes").strip().lower().startswith("y"):
             posted = await r.announce_event(eid)
@@ -472,6 +518,14 @@ class EventsListMenu(BaseMenu):
             sch = discord.ui.Select(placeholder="⏰ Schedule a reminder at MY time for…", options=opts(), row=3)
             sch.callback = self._schedule
             self.add_item(sch)
+            mv = discord.ui.Select(placeholder="📍 Change the channel it is posted in…", options=opts(), row=4)
+            mv.callback = self._move
+            self.add_item(mv)
+
+    async def _move(self, interaction):
+        eid = interaction.data["values"][0]
+        v = MoveTargetMenu(self.cog, self.user_id, eid)
+        await interaction.response.send_message(v.text(), view=v, ephemeral=True)
 
     async def _schedule(self, interaction):
         await interaction.response.send_modal(ReminderTimeModal(self.cog, interaction.data["values"][0]))
@@ -665,6 +719,48 @@ class ClassChangeModal(discord.ui.Modal):
             "✅ Saved: " + r.change_text(r._changes()[cid]) + ("\n📢 Announced in the section." if ok else "")
             + "\nStudents see it under 📅 Today / Tomorrow in 🗓️┃routine-and-deadlines.", ephemeral=True)
         await done(self.menu, "✅ Class change saved.")
+
+
+class MoveTargetMenu(BaseMenu):
+    def __init__(self, cog, user_id, eid):
+        super().__init__(cog, user_id)
+        self.eid = eid
+        r = cog.bot.get_cog("Routine")
+        ev = r._events()[eid]
+        self.target = ev.get("target") or r.default_target(ev["kind"])
+        sel = discord.ui.Select(placeholder="📍 New channel", options=[
+            discord.SelectOption(label=name, value=key, default=key == self.target) for key, name in r.target_options()][:25])
+        sel.callback = self._pick
+        self.add_item(sel)
+        a = discord.ui.Button(label="Move: delete old post & post there", emoji="🚚", style=discord.ButtonStyle.primary)
+        a.callback = self._move
+        self.add_item(a)
+        b = discord.ui.Button(label="Only for next reminders", emoji="💾", style=discord.ButtonStyle.secondary)
+        b.callback = self._save
+        self.add_item(b)
+
+    def text(self):
+        ev = self.cog.bot.get_cog("Routine")._events()[self.eid]
+        return f"📍 **{ev['title']}** — where should it be posted?"
+
+    async def _pick(self, i):
+        self.target = i.data["values"][0]
+        await i.response.defer()
+
+    async def _save(self, i):
+        r = self.cog.bot.get_cog("Routine")
+        r._events()[self.eid]["target"] = self.target
+        r.save_events()
+        await i.response.edit_message(content="💾 Saved — the old post stays; new posts go to the new channel.",
+                                      view=None)
+
+    async def _move(self, i):
+        r = self.cog.bot.get_cog("Routine")
+        r._events()[self.eid]["target"] = self.target
+        r.save_events()
+        await i.response.defer()
+        posted = await r.announce_event(self.eid, "move")
+        await i.edit_original_response(content=f"🚚 Moved — posted in: {', '.join(posted) or 'nothing'}", view=None)
 
 
 class ReminderTimeModal(discord.ui.Modal):
@@ -1058,7 +1154,7 @@ class KickMenu(BaseMenu):
             await done(i)
         await interaction.response.edit_message(
             content=f"⚠️ Kick **everyone** who joined more than **{self.days} days** ago and never verified?",
-            view=ConfirmView(self.cog, interaction.user.id, go, label="Yes, kick"), embed=None)
+            view=ConfirmView(self.cog, interaction.user.id, go, label="Yes, kick", typed="KICK"), embed=None)
 
 
 # ====================================================================== the panel
@@ -1284,13 +1380,14 @@ class Panel(commands.Cog):
                                                     "📢 Details & announce.\nStudents also see it in 📅 Today / Tomorrow.")
             return
         if key == "archive":
-            await interaction.response.defer(ephemeral=True, thinking=True)
             sem = self.bot.get_cog("Semester")
 
-            async def rep_(t):
-                pass
-            await sem.send_archive(rep_)
-            await interaction.followup.send("🗂️ Archive posted in the admin channel.", ephemeral=True)
+            async def go_archive(i):
+                async def rep_(t):
+                    pass
+                await sem.send_archive(rep_)
+                await i.followup.send("🗂️ Archive posted in the admin channel.", ephemeral=True)
+            await interaction.response.send_modal(TypedConfirmModal("ARCHIVE", go_archive))
             return
         if key == "new_semester":
             await interaction.response.send_modal(NewSemesterModal(self))

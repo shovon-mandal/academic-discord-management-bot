@@ -26,7 +26,7 @@ HELP = [
         ("post #ch… [@Role…] [audience] <text>", "Bot posts your text (+ attached files, [[Label | link]] buttons) in many channels", "!post #announcement #resources @3D Attendance: [[Open sheet | https://docs.google.com/...]]"),
         ("submissions", "Panel → 📝 Submission list: Google Sheet/Form link → who submitted, posted per section (3D's list in 3D)", "!submissions"),
         ("dash [sec]", "Section dashboard: students, next classes, deadlines, changes, attendance, submissions", "!dash 3D"),
-        ("archive", "ZIP of all data + students Excel + every section channel's posts", "!archive"),
+        ("archive ARCHIVE", "ZIP of all data + students Excel + every section channel's posts (type ARCHIVE = safety lock)", "!archive ARCHIVE"),
         ("check_welcome", "Did a pinned welcome / instructor card's text change? Shows details + asks what to do", "!check_welcome"),
         ("setup_welcome", "Post the welcome buttons + instructor cards AGAIN in every channel (only when you want; text/link changes update silently)", "!setup_welcome"),
         ("invite", "Invite link + join guide for students", "!invite"),

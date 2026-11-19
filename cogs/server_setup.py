@@ -20,14 +20,15 @@ class ServerSetup(commands.Cog):
         self.s = bot.settings
 
     # ------------------------------------------------------------ command
-    async def _ask(self, ctx, title, text, label, run, danger=True):
+    async def _ask(self, ctx, title, text, label, run, danger=True, typed=None):
         from cogs.panel import ConfirmView  # local import to avoid a cycle at load time
 
         async def go(interaction):
             await run(ctx)
         embed = discord.Embed(title=title, description=text,
                               color=discord.Color.red() if danger else discord.Color.orange())
-        await ctx.send(embed=embed, view=ConfirmView(self, ctx.author.id, go, label=label, danger=danger, timeout=120))
+        await ctx.send(embed=embed, view=ConfirmView(self, ctx.author.id, go, label=label, danger=danger, timeout=120,
+                                                        typed=typed))
 
     @commands.command(name="setup_server", aliases=["sync"])
     async def setup_server(self, ctx: commands.Context):
@@ -40,7 +41,7 @@ class ServerSetup(commands.Cog):
             "(their messages are lost)\n"
             "• re-post welcome buttons, instructor cards and this admin panel\n\n"
             "Students and their data are NOT affected.",
-            "Yes, run setup", self._run_setup, danger=False)
+            "Yes, run setup", self._run_setup, danger=False, typed="SETUP")
 
     async def _run_setup(self, ctx: commands.Context):
         status = await ctx.send("⏳ Building / syncing server structure... (1–3 minutes)")
@@ -76,7 +77,7 @@ class ServerSetup(commands.Cog):
             "and builds everything fresh from config.json.\n\n"
             "Students stay in the server and their records are kept, but they lose their roles and must "
             "verify again.\n\n**This cannot be undone.**",
-            "Yes, delete everything", self._run_reset, danger=True)
+            "Yes, delete everything", self._run_reset, danger=True, typed="RESET")
 
     async def _run_reset(self, ctx: commands.Context):
         guild = ctx.guild

@@ -701,64 +701,73 @@ class Routine(commands.Cog):
         hh, mm = (int(x) for x in str(cfg.get("deadline_reminder_time", "22:00")).split(":"))
         return (w - timedelta(days=1)).replace(hour=hh, minute=mm, second=0, microsecond=0)
 
+    # ---- where an item is posted (lab items → 🧪┃lab, the rest → 📢┃announcement; can be changed)
+    def target_options(self) -> list:
+        raw = self.s.raw.get("channels", {})
+        tpl = [c for c in raw.get("section", []) if c.get("type", "text") == "text"] + list(raw.get("lab", []))
+        return [(c["key"], c["name"]) for c in tpl]
+
+    def default_target(self, kind) -> str:
+        return "lab" if kind == "lab" else "announcement"
+
+    def target_channel(self, ev, sec):
+        key = ev.get("target") or self.default_target(ev["kind"])
+        return self.bot.channel_for(f"sec:{sec}:{key}") or self.bot.channel_for(f"sec:{sec}:announcement")
+
+    def _reminder_embed(self, ev, sec, auto=False):
+        name, icon = self.EVENT_TYPES.get(ev["kind"], ("Other", "📌"))
+        w = self.event_when(ev, sec)
+        now = self.s.now()
+        if w.date() == now.date():
+            rel = "TODAY"
+        elif (w.date() - now.date()).days == 1:
+            rel = "TOMORROW"
+        else:
+            rel = f"{w:%A}"
+        lines = [f"🗓️ **{rel}** · {w:%d %b} · ⏰ **{w:%I:%M %p}**"]
+        if ev["kind"] == "online":
+            place = self.event_place(ev, sec)
+            if place:
+                lines.append(f"📍 Join: {place.mention}")
+        if ev.get("details"):
+            lines.append(ev["details"][:500])
+        emb = discord.Embed(title=f"⏰ Reminder — {icon} {name}: {ev['title']}", description="\n".join(lines),
+                            color=discord.Color.red() if rel in ("TODAY", "TOMORROW") else discord.Color.orange())
+        emb.set_footer(text=f"{self.s.teacher} · Section {sec}" + (" · automatic reminder" if auto else "")
+                       + (" · ✏️ updated" if ev.get("edited") else ""))
+        return emb
+
+    async def _main_message(self, ev, sec):
+        old = (ev.get("msgs") or {}).get(sec)
+        if not old:
+            return None
+        try:
+            return await self.bot.get_channel(int(old[0])).fetch_message(int(old[1]))
+        except (discord.HTTPException, AttributeError):
+            return None
+
     async def send_reminder(self, eid, secs=None, auto=False) -> list:
+        """Reminder = a REPLY to the main announcement, in the same channel (lab → 🧪┃lab)."""
         ev = self._events().get(eid)
         if not ev:
             return []
-        name, icon = self.EVENT_TYPES.get(ev["kind"], ("Other", "📌"))
         sent = []
         for sec in secs or self.expand_secs(ev["sections"]):
-            ch = self.bot.channel_for(f"sec:{sec}:announcement")
+            ref = await self._main_message(ev, sec)
+            ch = ref.channel if ref else self.target_channel(ev, sec)
             if ch is None:
                 continue
-            w = self.event_when(ev, sec)
-            now = self.s.now()
-            if w.date() == now.date():
-                rel = "TODAY"
-            elif (w.date() - now.date()).days == 1:
-                rel = "TOMORROW"
-            else:
-                rel = f"{w:%A}"
-            lines = [f"🗓️ **{rel}** · {w:%d %b} · ⏰ **{w:%I:%M %p}**"]
-            if ev["kind"] == "online":
-                place = self.event_place(ev, sec)
-                if place:
-                    lines.append(f"📍 Join: {place.mention}")
-            if ev.get("details"):
-                lines.append(ev["details"][:500])
-            emb = discord.Embed(title=f"⏰ Reminder — {icon} {name}: {ev['title']}", description="\n".join(lines),
-                                color=discord.Color.red() if rel in ("TODAY", "TOMORROW") else discord.Color.orange())
-            emb.set_footer(text=f"{self.s.teacher} · Section {sec}" + (" · automatic reminder" if auto else ""))
             role = self.bot.role_for(f"role:sec:{sec}")
-            ref = None
-            old = (ev.get("msgs") or {}).get(sec)
-            if old:
-                try:
-                    ref = await self.bot.get_channel(int(old[0])).fetch_message(int(old[1]))
-                except (discord.HTTPException, AttributeError):
-                    ref = None
             try:
-                await ch.send(content=role.mention if role else None, embed=emb, reference=ref, mention_author=False,
-                              allowed_mentions=discord.AllowedMentions(roles=True))
+                m = await ch.send(content=role.mention if role else None, embed=self._reminder_embed(ev, sec, auto),
+                                  reference=ref, mention_author=False,
+                                  allowed_mentions=discord.AllowedMentions(roles=True))
+                ev.setdefault("rem_msgs", {}).setdefault(sec, []).append([m.channel.id, m.id])
                 sent.append(sec)
             except discord.HTTPException:
                 pass
-        return sent
-
-    def add_custom_reminder(self, eid, at, secs=None):
-        ev = self._events()[eid]
-        ev.setdefault("custom_reminders", []).append({"at": at.isoformat(timespec="minutes"), "secs": secs or [],
-                                                     "done": False})
         self.save_events()
-
-    def reminder_lines(self, ev) -> str:
-        out = []
-        for sec in self.expand_secs(ev["sections"])[:1]:
-            due = self.reminder_due(ev, sec)
-            out.append(f"auto {due:%d %b %I:%M %p}" + (" ✅" if sec in (ev.get("auto_reminded") or []) else ""))
-        for rem in ev.get("custom_reminders") or []:
-            out.append(f"{_dt_fromiso(rem['at']):%d %b %I:%M %p}" + (" ✅" if rem.get("done") else ""))
-        return " · ".join(out)
+        return sent
 
     async def _reminder_tick(self):
         await self.bot.wait_until_ready()
@@ -802,7 +811,7 @@ class Routine(commands.Cog):
         posted = []
         for sec in secs:
             w = self.event_when(ev, sec)
-            ch = self.bot.channel_for(f"sec:{sec}:announcement")
+            ch = self.target_channel(ev, sec)
             role = self.bot.role_for(f"role:sec:{sec}")
             if not ch:
                 continue
@@ -820,6 +829,22 @@ class Routine(commands.Cog):
                         continue
                     m = await self.bot.get_channel(int(old[0])).fetch_message(int(old[1]))
                     await m.edit(embed=emb)
+                    for rc, rm in (ev.get("rem_msgs") or {}).get(sec, []):  # fix the reminders too
+                        try:
+                            await self.bot.get_channel(int(rc)).get_partial_message(int(rm)).edit(
+                                embed=self._reminder_embed(ev, sec))
+                        except (discord.HTTPException, AttributeError):
+                            pass
+                elif mode == "move":  # posted in another channel now: remove the old post
+                    old = msgs.get(sec)
+                    if old:
+                        try:
+                            await self.bot.get_channel(int(old[0])).get_partial_message(int(old[1])).delete()
+                        except (discord.HTTPException, AttributeError):
+                            pass
+                    m = await ch.send(content=role.mention if role else None, embed=emb)
+                    msgs[sec] = [m.channel.id, m.id]
+                    ev.get("rem_msgs", {}).pop(sec, None)
                 else:
                     m = await ch.send(content=(("✏️ **Updated:** " if ev.get("edited") else "")
                                                + (role.mention if role else "")) or None, embed=emb)

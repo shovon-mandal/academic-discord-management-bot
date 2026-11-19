@@ -172,7 +172,10 @@ class Semester(commands.Cog):
         return path
 
     @commands.command(name="archive")
-    async def archive(self, ctx):
+    async def archive(self, ctx, confirm: str = ""):
+        if confirm.upper() != "ARCHIVE":
+            await ctx.send("⚠️ Safety lock: type `!archive ARCHIVE` to build the semester archive.")
+            return
         m = await ctx.send("⏳ Building the archive...")
 
         async def report(t):
