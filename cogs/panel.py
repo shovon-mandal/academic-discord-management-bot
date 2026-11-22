@@ -1248,6 +1248,7 @@ PANEL_GROUPS = [
     ("Row 1 · 📢 Communication", discord.Color.blurple(), [
         ("announce", "Announce", "📢", B.primary, "Pick section/course → write → posts in their announcement channel (can be scheduled)."),
         ("post", "Post as bot", "📤", B.success, "ANY channels (many) + roles → your text / files / link buttons → bot posts it everywhere."),
+        ("edit_post", "Edit bot post", "✏️", B.secondary, "Paste a message link → edit the text, buttons or style of any message the bot posted."),
         ("dm", "DM students", "✉️", B.primary, "Pick section/course → write → every student gets a private DM."),
         ("scheduled", "Scheduled posts", "🗓️", B.secondary, "See or cancel announcements waiting to be posted."),
         ("invite", "Invite link", "🔗", B.secondary, "Invite link + ready message for Facebook / WhatsApp."),
@@ -1486,6 +1487,11 @@ class Panel(commands.Cog):
             pm = PostMenu(pc, uid, interaction.guild)
             await menu(pm, pm.status_text() + "\n🔗 Style **…+ link buttons**: every link becomes a button (link under it)\n"
                        "🤖 First time? Click **🤖 Only bot-test** (only admins see it) to try.")
+            return
+        if key == "edit_post":
+            from cogs.poster import EditPostLinkModal
+            pc = interaction.client.get_cog("Poster")
+            await interaction.response.send_modal(EditPostLinkModal(pc, uid))
             return
         if key == "clean_welcome":
             await menu(CleanWelcomeMenu(self, uid),

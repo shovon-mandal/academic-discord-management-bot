@@ -569,6 +569,43 @@ class Poster(commands.Cog):
             att = self.bot.get_cog("Attendance")
             return await att.start_session(data["sec"], data["course"], data["minutes"], data.get("by") or user.name,
                                            approved=True)
+        if kind == "edit_post":
+            ch_id = data.get("edit_ch_id")
+            msg_id = data.get("edit_msg_id")
+            if not ch_id or not msg_id:
+                return "⚠️ Edit reference missing — could not apply the edit."
+            d = draft_from_dict(data, files)
+            ch = self.bot.main_guild().get_channel(int(ch_id))
+            if ch is None:
+                return f"⚠️ Channel <#{ch_id}> not found."
+            try:
+                orig = await ch.fetch_message(int(msg_id))
+            except discord.HTTPException:
+                return "⚠️ Original message not found (deleted?)."
+            if orig.author.id != self.bot.user.id:
+                return "⚠️ That message was not posted by the bot — cannot edit."
+            try:
+                if d.linkbuttons:
+                    await orig.edit(
+                        view=self.build_layout(d),
+                        content=None, embed=None,
+                        attachments=[],
+                    )
+                elif d.style == "card" and d.title:
+                    emb = discord.Embed(title=d.title, description=d.text, color=discord.Color.blurple())
+                    await orig.edit(embed=emb, content=None, view=None, attachments=[])
+                else:
+                    payloads = self._payloads(d, "")
+                    text_payload = payloads[0] if payloads else {}
+                    await orig.edit(
+                        content=text_payload.get("content") or "",
+                        embed=text_payload.get("embed"),
+                        view=None,
+                        attachments=[],
+                    )
+            except discord.HTTPException as exc:
+                return f"⚠️ Edit failed: {exc.text or exc}"
+            return f"✅ Message edited in <#{ch_id}> — [jump]({orig.jump_url})"
         if kind == "routine":
             rep, _ = await r.check(force_repost=bool(data.get("force")), apply=True)
             return "✅ Routine updated in the sections."
@@ -605,6 +642,41 @@ class Poster(commands.Cog):
         return await self.stage("post", draft_to_dict(d), self.post_header(d, guild), render, len(d.channels), by,
                                 files=d.files, replace=replace)
 
+    async def stage_edit_post(self, d: Draft, ch_id: int, msg_id: int, guild, by, replace=None):
+        """Stage a preview for editing an existing bot post. The preview shows the new content in bot-test;
+        on approval the original message is edited in-place."""
+        sample = Draft()
+        sample.__dict__.update(d.__dict__)
+        sample.mention = "none"
+
+        async def render(ch):
+            """Render the preview in bot-test so the teacher sees how it will look."""
+            header = discord.Embed(
+                title="👀 PREVIEW — Edit bot post (not applied yet)",
+                color=discord.Color.orange(),
+                description=f"Will edit the message in <#{ch_id}>",
+            )
+            await ch.send(embed=header)
+            if d.linkbuttons:
+                await ch.send(view=self.build_layout(sample),
+                              files=[discord.File(io.BytesIO(b), filename=n) for n, b in d.files])
+            else:
+                payloads = self._payloads(sample, "")
+                for i, p in enumerate(payloads):
+                    kw = {k: v for k, v in p.items() if v}
+                    if i == len(payloads) - 1 and d.files:
+                        kw["files"] = [discord.File(io.BytesIO(b), filename=n) for n, b in d.files]
+                    if kw:
+                        await ch.send(allowed_mentions=discord.AllowedMentions.none(), **kw)
+
+        edit_data = {**draft_to_dict(d), "edit_ch_id": ch_id, "edit_msg_id": msg_id}
+        e = discord.Embed(
+            title="👀 PREVIEW — Edit bot post (not applied yet)",
+            color=discord.Color.orange(),
+            description=f"Will edit the original message in <#{ch_id}>",
+        )
+        return await self.stage("edit_post", edit_data, e, render, 1, by, files=d.files, replace=replace)
+
     @commands.Cog.listener("on_interaction")
     async def _pv_interaction(self, interaction: discord.Interaction):
         if interaction.type != discord.InteractionType.component:
@@ -640,9 +712,11 @@ class Poster(commands.Cog):
             await self._pv_close(pid, f"❌ Cancelled by {interaction.user.mention} — nothing was posted.")
             return
         if action == "edit":
-            if kind == "post":
+            if kind in ("post", "edit_post"):
                 d = draft_from_dict(data, self._pv_files(pid))
-                await interaction.response.send_modal(PostModal(self, interaction.user.id, d, replace=pid))
+                edit_ref = (data["edit_ch_id"], data["edit_msg_id"]) if kind == "edit_post" else None
+                await interaction.response.send_modal(PostModal(self, interaction.user.id, d, replace=pid,
+                                                                edit_ref=edit_ref))
             elif kind == "event":
                 from cogs.panel import EventEditModal
                 await interaction.response.send_modal(EventEditModal(self.bot.get_cog("Panel"), data["eid"], None,
@@ -866,9 +940,10 @@ class PostMenu(_Owned):
 
 
 class PostModal(discord.ui.Modal):
-    def __init__(self, cog, user_id, d: Draft, replace=None):
-        super().__init__(title="📤 Post as bot", timeout=1800)
+    def __init__(self, cog, user_id, d: Draft, replace=None, edit_ref=None):
+        super().__init__(title="✏️ Edit bot post" if edit_ref else "📤 Post as bot", timeout=1800)
         self.cog, self.user_id, self.d, self.replace = cog, user_id, d, replace
+        self.edit_ref = edit_ref  # (channel_id, message_id) when editing an existing bot post
         self.title_in = discord.ui.TextInput(style=discord.TextStyle.short, required=False, max_length=200,
                                              default=d.title or None, placeholder="e.g. Attendance sheet — Week 6")
         self.text_in = discord.ui.TextInput(style=discord.TextStyle.paragraph, required=False, max_length=4000,
@@ -910,6 +985,19 @@ class PostModal(discord.ui.Modal):
             await interaction.followup.send("⚠️ Write a message or add a file.", ephemeral=True)
             return
         warn = ("\n⚠️ Not a link (ignored): " + ", ".join(f"`{b[:60]}`" for b in bad)) if bad else ""
+        # editing an existing bot post
+        if self.edit_ref:
+            ch_id, msg_id = self.edit_ref
+            pid = await self.cog.stage_edit_post(d, ch_id, msg_id, interaction.guild, interaction.user,
+                                                  replace=self.replace)
+            if pid:
+                await interaction.followup.send(
+                    f"👀 Edit preview posted in {self.cog.test_channel().mention} — "
+                    "it shows how the edited message will look. Click **✅ Post now** there to apply the edit."
+                    + warn, ephemeral=True)
+            else:
+                await interaction.followup.send("⚠️ Could not stage the edit preview.", ephemeral=True)
+            return
         pid = await self.cog.stage_post(d, interaction.guild, interaction.user, replace=self.replace)
         if pid:
             await interaction.followup.send(f"👀 Preview posted in {self.cog.test_channel().mention} — it shows where it "
@@ -973,6 +1061,115 @@ class PreviewView(_Owned):
     async def _no(self, i):
         self.stop()
         await i.response.edit_message(content="❎ Cancelled — nothing was posted.", view=None)
+
+
+class EditPostLinkModal(discord.ui.Modal):
+    """Step 1: teacher pastes the message link they want to edit."""
+
+    def __init__(self, cog, user_id):
+        super().__init__(title="✏️ Edit a bot post", timeout=300)
+        self.cog = cog
+        self.user_id = user_id
+        self.link_in = discord.ui.TextInput(
+            label="Message link",
+            placeholder="Right-click the message → Copy Message Link → paste here",
+            max_length=200,
+        )
+        self.add_item(self.link_in)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = (self.link_in.value or "").strip()
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        # resolve the link to a message
+        import re as _re
+        m = _re.search(r"channels/(\d+)/(\d+)/(\d+)", raw)
+        if not m:
+            await interaction.followup.send(
+                "⚠️ Not a valid message link.\n"
+                "Right-click the message → **Copy Message Link** and paste here.",
+                ephemeral=True,
+            )
+            return
+        guild = interaction.guild
+        ch = guild.get_channel(int(m.group(2))) or guild.get_thread(int(m.group(2)))
+        if ch is None:
+            await interaction.followup.send("⚠️ That channel is not in this server.", ephemeral=True)
+            return
+        try:
+            msg = await ch.fetch_message(int(m.group(3)))
+        except discord.HTTPException:
+            await interaction.followup.send("⚠️ Message not found — it may have been deleted.", ephemeral=True)
+            return
+        # must be the bot's own message
+        if msg.author.id != interaction.guild.me.id:
+            await interaction.followup.send(
+                "⚠️ That message was not posted by the bot — only bot messages can be edited.",
+                ephemeral=True,
+            )
+            return
+        # reconstruct the Draft from the existing message
+        d = Draft()
+        d.channels = [ch.id]
+        d.style = "plain"
+        d.mention = "none"
+        # pull text from embed or plain content
+        if msg.embeds:
+            e = msg.embeds[0]
+            d.title = e.title or ""
+            d.text = e.description or ""
+            d.style = "card"
+        elif msg.content:
+            d.text = msg.content
+        else:
+            # Components V2 — extract TextDisplay nodes
+            lines = []
+            for c in getattr(msg, "components", []):
+                if hasattr(c, "components"):
+                    for sub in c.components:
+                        if hasattr(sub, "content"):
+                            lines.append(sub.content)
+                elif hasattr(c, "content"):
+                    lines.append(c.content)
+            d.text = "\n".join(lines)
+            d.style = "plain"
+        # extract buttons from components
+        btns = []
+        for c in getattr(msg, "components", []):
+            comp_list = getattr(c, "components", [c])
+            for sub in comp_list:
+                if getattr(sub, "url", None):
+                    btns.append((sub.label or "Link", sub.url))
+        d.buttons = btns
+        d.linkbuttons = bool(btns)
+        # store the original message reference in the draft for the edit path
+        d._edit_msg_id = msg.id
+        d._edit_ch_id = ch.id
+        # open the PostModal pre-filled so the teacher can edit
+        await interaction.followup.send(
+            f"✏️ Editing bot post in {ch.mention} — the form below shows the current content. "
+            "Change what you want and click **Submit** — a preview will appear in bot-test.",
+            ephemeral=True,
+            view=_EditPostMenuView(self.cog, self.user_id, d, msg),
+        )
+
+
+class _EditPostMenuView(_Owned):
+    """Shows a single '✏️ Edit' button that opens PostModal pre-filled.
+    The resulting stage call carries the original message reference so run_approved edits instead of posts."""
+
+    def __init__(self, cog, user_id, d: Draft, orig_msg: discord.Message):
+        super().__init__(cog, user_id)
+        self.d = d
+        self.orig_msg = orig_msg
+        btn = discord.ui.Button(label="Open edit form", emoji="✏️", style=discord.ButtonStyle.primary)
+        btn.callback = self._open
+        self.add_item(btn)
+
+    async def _open(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(
+            PostModal(self.cog, self.user_id, self.d,
+                      replace=None, edit_ref=(self.orig_msg.channel.id, self.orig_msg.id))
+        )
 
 
 async def setup(bot):
