@@ -584,24 +584,25 @@ class Poster(commands.Cog):
                 return "⚠️ Original message not found (deleted?)."
             if orig.author.id != self.bot.user.id:
                 return "⚠️ That message was not posted by the bot — cannot edit."
+            # Detect whether the original message uses Components V2 (IS_COMPONENTS_V2 flag).
+            # Discord does not allow mixing content/embed with Components V2 in the same edit call.
+            is_v2 = bool(getattr(orig.flags, "is_components_v2", False) or
+                         (orig.flags.value & (1 << 15)))  # flag bit 15 = IS_COMPONENTS_V2
             try:
-                if d.linkbuttons:
-                    await orig.edit(
-                        view=self.build_layout(d),
-                        content=None, embed=None,
-                        attachments=[],
-                    )
+                if d.linkbuttons or is_v2:
+                    # Always re-render as Components V2 when the original was V2,
+                    # or when the new draft explicitly uses link buttons.
+                    await orig.edit(view=self.build_layout(d))
                 elif d.style == "card" and d.title:
                     emb = discord.Embed(title=d.title, description=d.text, color=discord.Color.blurple())
-                    await orig.edit(embed=emb, content=None, view=None, attachments=[])
+                    await orig.edit(embed=emb, content=None, view=None)
                 else:
                     payloads = self._payloads(d, "")
                     text_payload = payloads[0] if payloads else {}
                     await orig.edit(
-                        content=text_payload.get("content") or "",
-                        embed=text_payload.get("embed"),
+                        content=text_payload.get("content") or discord.utils.MISSING,
+                        embed=text_payload.get("embed") or None,
                         view=None,
-                        attachments=[],
                     )
             except discord.HTTPException as exc:
                 return f"⚠️ Edit failed: {exc.text or exc}"
