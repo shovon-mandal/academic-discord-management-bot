@@ -640,18 +640,29 @@ class NewSemesterModal(discord.ui.Modal):
         await self.cog.bot.send_log("🆕 New semester", text + f"\nby {interaction.user.mention}")
 
 
+DEFAULT_CANCEL_NOTE = ("A makeup class will be announced later if needed. "
+                       "Cancelled due to unavoidable reasons. Thank you for your understanding.")
+
+
 class ClassChangeMenu(BaseMenu):
-    """🚫 Cancel / 🔁 reschedule / 💻 make online one of my classes."""
-    ACTIONS = [("cancel", "Cancel the class", "🚫"), ("reschedule", "Reschedule (new date / time / room)", "🔁"),
+    """🚫 Cancel / 🔁 reschedule / 💻 make online one of my classes.
+
+    Cancel supports multi-select: pick any number of classes across any sections
+    and they all get saved + announced in one go (one message per section channel).
+    Reschedule / online stay single-class (they need per-class details).
+    """
+    ACTIONS = [("cancel", "Cancel class(es)", "🚫"), ("reschedule", "Reschedule (new date / time / room)", "🔁"),
                ("online", "Take it online", "💻")]
 
     def __init__(self, cog, user_id):
         super().__init__(cog, user_id)
         self.sec = None
-        self.occ = None      # (date, entry)
+        self.occ = None          # single (date, entry) — used for reschedule / online
+        self.occs: list = []     # multi-selected indices — used for cancel
         self.action = "cancel"
         self._build()
 
+    # ---------------------------------------------------------------- build
     def _build(self):
         self.clear_items()
         r = self.cog.bot.get_cog("Routine")
@@ -661,23 +672,42 @@ class ClassChangeMenu(BaseMenu):
         ss = discord.ui.Select(placeholder="1️⃣ Section", options=so, row=0)
         ss.callback = self._sec
         self.add_item(ss)
+
         occ = r.class_occurrences(self.sec) if self.sec else []
         self._occ = occ[:25]
+        is_cancel = self.action == "cancel"
+
         if self._occ:
-            os_ = discord.ui.Select(placeholder="2️⃣ Which class?", row=1, options=[
-                discord.SelectOption(label=f"{d:%a %d %b} · {it['time']} · {it['course']}"[:100], value=str(i),
-                                     description=f"Room {it['room']} · {r._course_name(it['course'], True)}"[:100],
-                                     emoji="🏫", default=(self.occ is not None and self.occ == (d, it)))
-                for i, (d, it) in enumerate(self._occ)])
+            opts = [
+                discord.SelectOption(
+                    label=f"{d:%a %d %b} · {it['time']} · {it['course']}"[:100],
+                    value=str(i),
+                    description=f"Room {it['room']} · {r._course_name(it['course'], True)}"[:100],
+                    emoji="🏫",
+                    default=(i in self.occs if is_cancel else (self.occ is not None and self.occ == (d, it)))
+                )
+                for i, (d, it) in enumerate(self._occ)
+            ]
+            if is_cancel:
+                os_ = discord.ui.Select(
+                    placeholder="2️⃣ Which class(es) to cancel? (pick as many as you want)",
+                    row=1, min_values=1, max_values=len(opts), options=opts)
+            else:
+                os_ = discord.ui.Select(
+                    placeholder="2️⃣ Which class?", row=1, options=opts)
         else:
-            os_ = discord.ui.Select(placeholder="2️⃣ Your classes appear after you choose a section", row=1,
-                                    disabled=True, options=[discord.SelectOption(label="—", value="x")])
+            os_ = discord.ui.Select(
+                placeholder="2️⃣ Your classes appear after you choose a section", row=1,
+                disabled=True, options=[discord.SelectOption(label="—", value="x")])
         os_.callback = self._occ_pick
         self.add_item(os_)
+
         ac = discord.ui.Select(placeholder="3️⃣ What to do?", row=2, options=[
-            discord.SelectOption(label=l, value=v, emoji=e, default=v == self.action) for v, l, e in self.ACTIONS])
+            discord.SelectOption(label=l, value=v, emoji=e, default=v == self.action)
+            for v, l, e in self.ACTIONS])
         ac.callback = self._act
         self.add_item(ac)
+
         chg = sorted(r._changes().items(), key=lambda x: x[1]["date"])[:25]
         if chg:
             un = discord.ui.Select(placeholder="↩️ Undo a change (delete it)…", row=3, options=[
@@ -685,23 +715,49 @@ class ClassChangeMenu(BaseMenu):
                 for k, c in chg])
             un.callback = self._undo
             self.add_item(un)
-        go = discord.ui.Button(label="4️⃣ Details & announce", emoji="📢", style=discord.ButtonStyle.success, row=4)
+
+        lbl = "4️⃣ Details & announce"
+        go = discord.ui.Button(label=lbl, emoji="📢", style=discord.ButtonStyle.success, row=4)
         go.callback = self._go
         self.add_item(go)
 
+    def _status(self) -> str:
+        r = self.cog.bot.get_cog("Routine")
+        lines = ["🚫 **Cancel / reschedule / online class**",
+                 "1️⃣ Section → 2️⃣ class(es) → 3️⃣ action → 4️⃣ Details & announce"]
+        if self.action == "cancel" and self.occs and self._occ:
+            picked = [f"**{self._occ[i][1]['course']}** {self._occ[i][0]:%d %b}"
+                      for i in self.occs if i < len(self._occ)]
+            lines.append(f"🗑️ Selected ({len(picked)}): " + ", ".join(picked))
+        elif self.occ:
+            d, it = self.occ
+            lines.append(f"🏫 Selected: **{it['course']}** {d:%a %d %b} {it['time']}")
+        return "\n".join(lines)
+
+    # ---------------------------------------------------------------- callbacks
     async def _sec(self, i):
         self.sec = i.data["values"][0]
         self.occ = None
+        self.occs = []
         self._build()
-        await i.response.edit_message(view=self)
+        await i.response.edit_message(content=self._status(), view=self)
 
     async def _occ_pick(self, i):
-        self.occ = self._occ[int(i.data["values"][0])]
-        await i.response.defer()
+        vals = i.data["values"]
+        if self.action == "cancel":
+            self.occs = [int(v) for v in vals]
+            self.occ = None
+        else:
+            self.occ = self._occ[int(vals[0])]
+            self.occs = []
+        await i.response.edit_message(content=self._status(), view=self)
 
     async def _act(self, i):
         self.action = i.data["values"][0]
-        await i.response.defer()
+        self.occ = None
+        self.occs = []
+        self._build()
+        await i.response.edit_message(content=self._status(), view=self)
 
     async def _undo(self, i):
         r = self.cog.bot.get_cog("Routine")
@@ -712,10 +768,73 @@ class ClassChangeMenu(BaseMenu):
                                               "Post a short notice if you had announced it.", view=self)
 
     async def _go(self, i):
-        if not self.occ:
-            await i.response.send_message("Choose the section and the class first.", ephemeral=True)
-            return
-        await i.response.send_modal(ClassChangeModal(self.cog, self.sec, self.occ, self.action, i))
+        if self.action == "cancel":
+            if not self.occs:
+                await i.response.send_message("Choose at least one class to cancel.", ephemeral=True)
+                return
+            occs = [self._occ[idx] for idx in self.occs if idx < len(self._occ)]
+            await i.response.send_modal(
+                ClassCancelBulkModal(self.cog, self.sec, occs, i))
+        else:
+            if not self.occ:
+                await i.response.send_message("Choose the section and the class first.", ephemeral=True)
+                return
+            await i.response.send_modal(ClassChangeModal(self.cog, self.sec, self.occ, self.action, i))
+
+
+class ClassCancelBulkModal(discord.ui.Modal):
+    """Modal for cancelling one or more classes at once (possibly across the same section)."""
+
+    def __init__(self, cog, sec, occs: list, menu):
+        n = len(occs)
+        super().__init__(title=f"🚫 Cancel {n} class{'es' if n > 1 else ''} · {sec}"[:45], timeout=900)
+        self.cog, self.sec, self.occs, self.menu = cog, sec, occs, menu
+
+        summary = ", ".join(
+            f"{d:%d %b} {it['course']}" for d, it in occs[:3]
+        ) + (" …" if n > 3 else "")
+        self.note = discord.ui.TextInput(
+            label=f"Note for students ({summary})"[:45],
+            style=discord.TextStyle.paragraph,
+            required=False,
+            max_length=300,
+            default=DEFAULT_CANCEL_NOTE,
+            placeholder="Leave as-is or change the message students will see",
+        )
+        self.ann = discord.ui.TextInput(
+            label="Announce now? (yes / no)", default="yes", max_length=3, required=False)
+        self.add_item(self.note)
+        self.add_item(self.ann)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        r = self.cog.bot.get_cog("Routine")
+        note = (self.note.value or "").strip()
+        cids = []
+        for d, it in self.occs:
+            cid = r.add_change(self.sec, d, it, "cancel", note=note)
+            cids.append(cid)
+
+        announce = (self.ann.value or "yes").strip().lower().startswith("y")
+        staged, ok_secs = None, {}
+        if announce:
+            staged = await r.stage_changes_bulk(cids, note, interaction.user)
+            if not staged:
+                ok_secs = await r.announce_changes_bulk(cids, note)
+
+        lines = [f"✅ Saved {len(cids)} cancellation(s) for section **{self.sec}**:"]
+        changes = r._changes()
+        for cid in cids:
+            c = changes.get(cid)
+            if c:
+                lines.append(f"  🚫 {c['course']} · {c['date']} {c['time']}")
+        if ok_secs:
+            ok = [s for s, v in ok_secs.items() if v]
+            lines.append(f"📢 Announced in: {', '.join(ok) or '—'}")
+        if staged:
+            lines.append("👀 Preview in the bot-test channel — click **✅ Post now** there to announce.")
+        lines.append("Students see it under 📅 Today / Tomorrow in 🗓️┃routine-and-deadlines.")
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+        await done(self.menu, f"✅ {len(cids)} class(es) cancelled.")
 
 
 class ClassChangeModal(discord.ui.Modal):
@@ -737,6 +856,7 @@ class ClassChangeModal(discord.ui.Modal):
                                               placeholder="https://meet.google.com/...")
         self.note = discord.ui.TextInput(label="Note for students (optional)", required=False, max_length=300,
                                          style=discord.TextStyle.paragraph,
+                                         default=DEFAULT_CANCEL_NOTE if action == "cancel" else None,
                                          placeholder="e.g. Make-up class will be announced · Bring your laptop")
         self.ann = discord.ui.TextInput(label="Announce now? (yes / no)", default="yes", max_length=3, required=False)
         for x in (self.new, self.place, self.note, self.ann):

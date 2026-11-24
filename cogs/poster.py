@@ -547,6 +547,14 @@ class Poster(commands.Cog):
         if kind == "change":
             ok = await r.announce_change(data["cid"])
             return "✅ Announced in the section." if ok else "⚠️ Could not post (announcement channel missing?)."
+        if kind == "change_bulk":
+            results = await r.announce_changes_bulk(data["cids"], data.get("shared_note", ""))
+            ok_secs = [s for s, v in results.items() if v]
+            fail_secs = [s for s, v in results.items() if not v]
+            out = f"✅ Announced in: {', '.join(ok_secs) or 'nothing'}"
+            if fail_secs:
+                out += f"\n⚠️ Could not post in: {', '.join(fail_secs)} (channel missing?)"
+            return out
         if kind == "reminder":
             secs = await r.send_reminder(data["eid"], data.get("secs") or None, approved=True)
             return f"✅ Reminder sent to: {', '.join(secs) or 'nothing'}"

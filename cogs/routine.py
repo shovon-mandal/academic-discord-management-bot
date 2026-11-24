@@ -688,6 +688,77 @@ class Routine(commands.Cog):
         except discord.HTTPException:
             return False
 
+    async def announce_changes_bulk(self, cids: list, shared_note: str = "") -> dict:
+        """Announce multiple class changes. Groups by section so each section gets ONE message.
+        Returns {sec: True/False} for each section that was targeted."""
+        from collections import defaultdict
+        changes = self._changes()
+        # group cids by section
+        by_sec: dict = defaultdict(list)
+        for cid in cids:
+            c = changes.get(cid)
+            if c:
+                by_sec[c["sec"]].append(cid)
+        results = {}
+        for sec, sec_cids in by_sec.items():
+            ch = self.bot.channel_for(f"sec:{sec}:announcement")
+            if ch is None:
+                results[sec] = False
+                continue
+            role = self.bot.role_for(f"role:sec:{sec}")
+            if len(sec_cids) == 1:
+                c = changes[sec_cids[0]]
+                if shared_note and not c.get("note"):
+                    c["note"] = shared_note
+                emb = self.change_embed(c)
+                embeds = [emb]
+            else:
+                # Multiple classes in the same section → one embed per class, stacked
+                embeds = []
+                for cid in sec_cids:
+                    c = changes[cid]
+                    if shared_note and not c.get("note"):
+                        c["note"] = shared_note
+                    embeds.append(self.change_embed(c))
+            try:
+                await ch.send(content=role.mention if role else None,
+                              embeds=embeds[:10],
+                              allowed_mentions=discord.AllowedMentions(roles=True))
+                results[sec] = True
+            except discord.HTTPException:
+                results[sec] = False
+        if shared_note:
+            self.save_changes()
+        return results
+
+    async def stage_changes_bulk(self, cids: list, shared_note: str, by) -> str | None:
+        """Stage a preview for multiple class changes at once. Returns pid or None."""
+        poster = self.bot.get_cog("Poster")
+        if not poster or not poster.test_channel():
+            return None
+        changes = self._changes()
+        from collections import defaultdict
+        by_sec: dict = defaultdict(list)
+        for cid in cids:
+            c = changes.get(cid)
+            if c:
+                by_sec[c["sec"]].append(cid)
+        total_secs = len(by_sec)
+        info_lines = [f"📍 Announcing to **{total_secs}** section(s): "
+                      + ", ".join(f"**{sec}**" for sec in by_sec)]
+
+        async def render(tc):
+            for sec, sec_cids in by_sec.items():
+                ch = self.bot.channel_for(f"sec:{sec}:announcement")
+                loc = f"in {ch.mention}" if ch else f"(section {sec} — channel missing)"
+                await tc.send(content=f"**Preview** {loc}",
+                              embeds=[self.change_embed(changes[cid]) for cid in sec_cids[:10]])
+
+        return await poster.gate(
+            "change_bulk", {"cids": cids, "shared_note": shared_note},
+            f"Class cancel · {total_secs} section(s)", info_lines, render, total_secs, by
+        )
+
     # ---- online class place + reminders
     def event_place(self, ev, sec):
         """Channel where an online class happens: chosen channel, else the section's voice channel."""
