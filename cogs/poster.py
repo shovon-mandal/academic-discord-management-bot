@@ -576,7 +576,7 @@ class Poster(commands.Cog):
         if kind == "attendance":
             att = self.bot.get_cog("Attendance")
             return await att.start_session(data["sec"], data["course"], data["minutes"], data.get("by") or user.name,
-                                           approved=True)
+                                           approved=True, channels=data.get("channels") or [])
         if kind == "edit_post":
             ch_id = data.get("edit_ch_id")
             msg_id = data.get("edit_msg_id")

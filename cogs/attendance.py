@@ -96,7 +96,14 @@ class Attendance(commands.Cog):
                 f"{info['short']} — join **🔊 voice channel** of this section now."
                 + (f" (closes in {minutes} min)" if minutes else ""))
 
-    async def start_session(self, sec: str, course: str | None, minutes: int, by: str, approved: bool = False):
+    async def start_session(self, sec: str, course: str | None, minutes: int, by: str,
+                            approved: bool = False, channels: list[int] | None = None):
+        """Start an attendance session for `sec`.
+
+        channels: optional list of voice channel IDs to watch instead of the whole section
+        category. When given, only members in those channels are counted. This lets multiple
+        sections share a single physical classroom voice channel.
+        """
         if sec in self.sessions:
             raise commands.BadArgument(f"Attendance for {sec} is already running. Stop it first.")
         course = course or self.s.default_course(sec)
@@ -112,7 +119,8 @@ class Attendance(commands.Cog):
 
             async def render(tc):
                 await tc.send(text, allowed_mentions=discord.AllowedMentions.none())
-            await poster.gate("attendance", {"sec": sec, "course": course, "minutes": minutes, "by": by},
+            await poster.gate("attendance", {"sec": sec, "course": course, "minutes": minutes, "by": by,
+                                             "channels": channels or []},
                               f"Attendance · {sec}", info, render, 1, None)
             return (f"👀 Preview in {poster.test_channel().mention} — click **✅ Post now** there to start "
                     f"attendance for {sec}.")
@@ -121,13 +129,22 @@ class Attendance(commands.Cog):
             "section": sec, "course": course, "started_at": now.isoformat(timespec="seconds"),
             "ends_at": (now + timedelta(minutes=minutes)).isoformat(timespec="seconds") if minutes else None,
             "started_by": by, "present": {},
+            "channels": channels or [],   # [] = category-based (default)
         }
         self._save()
-        cat = self._category(sec)
-        if cat:
-            for vc in cat.voice_channels:
-                for m in vc.members:
-                    self._join(sec, m, vc.name, now)
+        # pre-fill anyone already in the target voice channel(s)
+        if channels:
+            for ch_id in channels:
+                vc = self.bot.get_channel(ch_id)
+                if vc:
+                    for m in vc.members:
+                        self._join(sec, m, vc.name, now)
+        else:
+            cat = self._category(sec)
+            if cat:
+                for vc in cat.voice_channels:
+                    for m in vc.members:
+                        self._join(sec, m, vc.name, now)
         info = self.s.courses[course]
         ann = self.bot.channel_for(f"sec:{sec}:announcement")
         if ann:
@@ -402,16 +419,23 @@ class Attendance(commands.Cog):
         a_id = after.channel.id if after.channel else None
         if b_id == a_id:
             return
-        for sec in list(self.sessions):
-            cat = self._category(sec)
-            if not cat:
-                continue
-            was_in = before.channel is not None and before.channel.category_id == cat.id
-            now_in = after.channel is not None and after.channel.category_id == cat.id
+        for sec, sess in list(self.sessions.items()):
+            ch_ids = sess.get("channels") or []
+            if ch_ids:
+                # specific-channel mode: track only those channel IDs
+                was_in = b_id in ch_ids
+                now_in = a_id in ch_ids
+            else:
+                # category mode (default)
+                cat = self._category(sec)
+                if not cat:
+                    continue
+                was_in = before.channel is not None and before.channel.category_id == cat.id
+                now_in = after.channel is not None and after.channel.category_id == cat.id
             if was_in and not now_in:
                 self._leave(sec, member.id)
             elif now_in and not was_in:
-                self._join(sec, member, after.channel.name)
+                self._join(sec, member, (after.channel.name if after.channel else ""))
 
 
 async def setup(bot):

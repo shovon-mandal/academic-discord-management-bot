@@ -1115,78 +1115,195 @@ class EventEditModal(discord.ui.Modal):
 
 
 # ====================================================================== attendance
+def _sections_in_channel(bot, ch: discord.VoiceChannel, settings) -> list[str]:
+    """Sections whose role has access to this voice channel (can connect / view)."""
+    out = []
+    for sec in settings.sections:
+        role = bot.role_for(f"role:sec:{sec}")
+        if role is None:
+            continue
+        perms = ch.permissions_for(role)
+        if perms.view_channel or perms.connect:
+            out.append(sec)
+    return out
+
+
 class AttStartMenu(BaseMenu):
+    """▶️ Start attendance.
+
+    Flow A — specific voice channel (new):
+      1️⃣ Pick a voice channel → bot shows which sections have access there
+      2️⃣ Pick section(s) (multi-select, default = all with access)
+      3️⃣ Course per section (modal if sections differ in course)
+      4️⃣ Duration → Start
+
+    Flow B — classic (section-first, category-based):
+      If no voice channel is chosen, falls back to the old per-section category tracking.
+    """
+
     def __init__(self, cog, user_id):
         super().__init__(cog, user_id)
-        self.sec = None
-        self.course = None
+        self.voice_ch: int | None = None   # chosen voice channel ID
+        self.secs: list = []               # chosen sections
+        self.courses: dict = {}            # sec → course key
         self.minutes = 0
+        self._eligible: list = []          # sections that have access to voice_ch
         self._build()
 
+    # ---------------------------------------------------------------- build
     def _build(self):
         self.clear_items()
         s = self.cog.s
-        running = set(self.cog.bot.get_cog("Attendance").sessions)
-        sec_opts = [o for o in section_options(s) if o.value not in running]
-        for o in sec_opts:
-            o.default = (o.value == self.sec)
-        if not sec_opts:
-            return
-        sel = discord.ui.Select(placeholder="1️⃣ Choose section", options=sec_opts, row=0)
-        sel.callback = self._sec
-        self.add_item(sel)
-        if self.sec:
-            copts = course_options(s, self.sec)
-            for o in copts:
-                o.default = (o.value == self.course)
-            csel = discord.ui.Select(placeholder="2️⃣ Course", options=copts, row=1)
-            csel.callback = self._course
-            self.add_item(csel)
+        bot = self.cog.bot
+        att = bot.get_cog("Attendance")
+        running = set(att.sessions)
+
+        # Row 0 — voice channel dropdown
+        vo = voice_options(bot, list(s.sections), self.voice_ch)
+        none_opt = discord.SelectOption(label="(no specific channel — use section category)", value="0",
+                                        emoji="🏫", default=(self.voice_ch is None))
+        vc_sel = discord.ui.Select(
+            placeholder="1️⃣ Voice channel (or 'section category')",
+            options=[none_opt] + vo if vo else [none_opt],
+            row=0)
+        vc_sel.callback = self._vc
+        self.add_item(vc_sel)
+
+        # Row 1 — section multi-select
+        if self.voice_ch:
+            eligible = self._eligible or []
+        else:
+            eligible = [sec for sec in s.sections if sec not in running]
+        if eligible:
+            sec_opts = []
+            for o in section_options(s):
+                if o.value not in eligible:
+                    continue
+                if o.value in running:
+                    o.label += " ⚠️ running"
+                    o.description = "already has attendance — will be skipped"
+                o.default = o.value in self.secs
+                sec_opts.append(o)
+            if sec_opts:
+                ss = discord.ui.Select(
+                    placeholder="2️⃣ Section(s)",
+                    options=sec_opts, row=1,
+                    min_values=1, max_values=len(sec_opts))
+                ss.callback = self._secs
+                self.add_item(ss)
+
+        # Row 2 — course (single dropdown showing all selected sections' default course)
+        if self.secs:
+            # Build a flat list of (sec, course) options — one entry per section×course combo
+            all_copts = []
+            for sec in self.secs:
+                for o in course_options(s, sec):
+                    o.label = f"[{sec}] {o.label}"
+                    o.value = f"{sec}:{o.value}"
+                    o.default = (self.courses.get(sec) == o.value.split(":", 1)[1])
+                    all_copts.append(o)
+            if all_copts:
+                csel = discord.ui.Select(
+                    placeholder="3️⃣ Course (one per section)",
+                    options=all_copts[:25], row=2,
+                    min_values=len(self.secs), max_values=len(all_copts[:25]))
+                csel.callback = self._course
+                self.add_item(csel)
+
+        # Row 3 — duration
+        if self.secs:
             dopts = [discord.SelectOption(label=l, value=str(m), emoji="⏱️", default=(m == self.minutes))
                      for l, m in DURATIONS]
-            dsel = discord.ui.Select(placeholder="3️⃣ Auto-stop after…", options=dopts, row=2)
+            dsel = discord.ui.Select(placeholder="4️⃣ Auto-stop after…", options=dopts, row=3)
             dsel.callback = self._dur
             self.add_item(dsel)
-            go = discord.ui.Button(label="Start attendance", style=discord.ButtonStyle.success, emoji="▶️", row=3)
+
+        # Row 4 — start button
+        if self.secs and all(self.courses.get(sec) for sec in self.secs):
+            go = discord.ui.Button(label=f"▶️ Start attendance ({len(self.secs)} section(s))",
+                                   style=discord.ButtonStyle.success, row=4)
             go.callback = self._go
             self.add_item(go)
 
-    def _embed(self):
+    def _embed(self) -> discord.Embed:
         s = self.cog.s
-        if not self.sec:
-            return discord.Embed(title="▶️ Start attendance", description="Choose the section.", color=discord.Color.green())
-        c = s.courses[self.course]
-        return discord.Embed(title="▶️ Start attendance", color=discord.Color.green(),
-                             description=f"**Section:** {self.sec}\n**Course:** {c['code']} {c['title']}\n"
-                                         f"**Auto-stop:** {self.minutes or 'off'}{' min' if self.minutes else ''}\n\n"
-                                         "Students who join any 🔊 voice channel of this section are marked present, "
-                                         "and their time in class is recorded.")
+        if not self.secs:
+            return discord.Embed(title="▶️ Start attendance",
+                                 description="1️⃣ Pick a voice channel (or section category)\n"
+                                             "2️⃣ Pick section(s)\n3️⃣ Course · 4️⃣ Duration → Start",
+                                 color=discord.Color.green())
+        lines = []
+        g = self.cog.bot.main_guild()
+        if self.voice_ch and g:
+            vc = g.get_channel(self.voice_ch)
+            lines.append(f"🔊 **Voice channel:** {vc.mention if vc else self.voice_ch}")
+        for sec in self.secs:
+            c_key = self.courses.get(sec)
+            c = s.courses[c_key] if c_key else None
+            lines.append(f"• **{sec}** — {c['code'] + ' ' + c['short'] if c else '(choose course)'}")
+        lines.append(f"⏱️ Auto-stop: {self.minutes or 'off'}{' min' if self.minutes else ''}")
+        return discord.Embed(title="▶️ Start attendance", description="\n".join(lines),
+                             color=discord.Color.green())
 
-    async def _sec(self, interaction):
-        self.sec = interaction.data["values"][0]
-        self.course = self.cog.s.default_course(self.sec)
+    # ---------------------------------------------------------------- callbacks
+    async def _vc(self, interaction):
+        val = int(interaction.data["values"][0])
+        if val == 0:
+            self.voice_ch = None
+            self._eligible = []
+        else:
+            self.voice_ch = val
+            g = self.cog.bot.main_guild()
+            ch = g.get_channel(val) if g else None
+            self._eligible = _sections_in_channel(self.cog.bot, ch, self.cog.s) if ch else []
+            # pre-select all eligible that aren't already running
+            running = set(self.cog.bot.get_cog("Attendance").sessions)
+            self.secs = [sec for sec in self._eligible if sec not in running]
+            # set default courses
+            for sec in self.secs:
+                if sec not in self.courses:
+                    self.courses[sec] = self.cog.s.default_course(sec)
+        self._build()
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+    async def _secs(self, interaction):
+        self.secs = interaction.data["values"]
+        # keep existing course choices, default new ones
+        for sec in self.secs:
+            if sec not in self.courses:
+                self.courses[sec] = self.cog.s.default_course(sec)
         self._build()
         await interaction.response.edit_message(embed=self._embed(), view=self)
 
     async def _course(self, interaction):
-        self.course = interaction.data["values"][0]
+        for v in interaction.data["values"]:
+            sec, course = v.split(":", 1)
+            self.courses[sec] = course
         self._build()
         await interaction.response.edit_message(embed=self._embed(), view=self)
 
     async def _dur(self, interaction):
         self.minutes = int(interaction.data["values"][0])
-        self._build()
         await interaction.response.edit_message(embed=self._embed(), view=self)
 
     async def _go(self, interaction):
         att = self.cog.bot.get_cog("Attendance")
-        try:
-            text = await att.start_session(self.sec, self.course, self.minutes, interaction.user.name)
-        except commands.BadArgument as e:
-            await interaction.response.edit_message(content=f"⚠️ {e}", embed=None, view=None)
-            return
-        await interaction.response.edit_message(content="✅ Started.", embed=None, view=None)
-        await interaction.channel.send(text)
+        running = set(att.sessions)
+        channels = [self.voice_ch] if self.voice_ch else []
+        results = []
+        for sec in self.secs:
+            if sec in running:
+                results.append(f"⚠️ {sec} already running — skipped")
+                continue
+            course = self.courses.get(sec) or self.cog.s.default_course(sec)
+            try:
+                text = await att.start_session(sec, course, self.minutes,
+                                               interaction.user.name, channels=channels)
+                results.append(text)
+            except commands.BadArgument as e:
+                results.append(f"⚠️ {sec}: {e}")
+        await interaction.response.edit_message(content="✅ Done.", embed=None, view=None)
+        await interaction.channel.send("\n".join(results))
 
 
 class AttStopMenu(BaseMenu):
